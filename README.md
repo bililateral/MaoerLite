@@ -38,19 +38,23 @@
 
 ---
 
-## ✨ 已实现功能 (Implemented Features)
+## ✨ 已实现功能
 
 *   **跨平台架构**: Android 和 iOS 共享 **95%+** 的业务逻辑与 UI 代码。
 *   **首页瀑布流**: 
     *   使用 `LazyVerticalStaggeredGrid` 实现双列交错布局。
     *   基于 `StateFlow` 的数据驱动 UI，包含加载状态 (Loading) 管理。
+*   **全局播放管理器 (Global Player Manager)**:
+    *   单例模式管理音频播放状态，确保首页与详情页状态实时同步。
+    *   支持上一首/下一首切换，**播放结束后自动连续播放下一首**，循环播放列表。
+    *   **持久化存储**: 应用重启后，自动恢复上次播放的音频和**精确播放进度**。
+    *   后台模拟播放 (Ticker)，不依赖真实音频引擎即可验证 UI 逻辑。
 *   **沉浸式详情页**:
-    *   **视差滚动 (Parallax Scrolling)**: 背景封面随手指滑动产生视差位移效果，顶部导航栏根据 Z-Index 机制正确处理点击事件。
-    *   **UI 交互**: 实现了播放器进度条拖拽逻辑。
-    *   **模拟播放**: 使用协程 (`LaunchedEffect`) 模拟音频播放进度流转。
-*   **工程化**:
-    *   使用 `libs.versions.toml` (Version Catalog) 统一管理依赖。
-    *   模块化分层设计 (Data / UI)。
+    *   **视差滚动 (Parallax Scrolling)**: 背景封面随手指滑动产生视差位移效果。
+    *   **全局控制**: 集成播放/暂停、上一首、下一首、进度条拖拽控制。
+*   **底部播放条 (Bottom Player Bar)**:
+    *   首页常驻悬浮播放条，实时显示当前曲目信息与简易进度。
+    *   点击即可快速跳转至详情页。
 
 ---
 
@@ -62,7 +66,7 @@
 
 ---
 
-## 🚀 快速开始 (Getting Started)
+## 🚀 快速开始
 
 ### 环境要求
 *   JDK 17+
@@ -84,11 +88,15 @@
 
 ```text
 commonMain/kotlin/com/maoer/lite/
-├── data/           # 数据层 (Repository, Models - Mock Data)
+├── data/           
+│   ├── local/      # 本地持久化 (KeyValueStorage)
+│   ├── manager/    # 播放管理器 (PlayerManager)
+│   ├── model/      # 数据模型
+│   └── repository/ # 数据仓库 (Mock Data)
 ├── di/             # Koin 依赖注入模块 (AppModule)
 ├── ui/             # Compose UI 界面
-│   ├── home/       # 首页 (StaggeredGrid + ViewModel)
-│   ├── detail/     # 详情页 (Parallax Effect + Player State)
+│   ├── home/       # 首页 (StaggeredGrid + BottomPlayerBar)
+│   ├── detail/     # 详情页 (Parallax Effect + Player Controls)
 │   └── ...
 ├── App.kt          # 应用入口
 └── Platform.kt     # 平台差异化接口

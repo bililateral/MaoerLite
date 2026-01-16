@@ -3,6 +3,13 @@ package com.maoer.lite.data.repository
 import com.maoer.lite.data.model.Audio
 import kotlinx.coroutines.delay
 
+/**
+ * 模拟后端 API 的 Mock 仓库。
+ * 
+ * 在真实应用程序中，这里会注入 Ktor HttpClient（或类似工具）
+ * 从 REST/GraphQL 端点获取数据。
+ * 目前，它在模拟延迟后返回硬编码的推荐音频列表。
+ */
 class MaoerRepository {
 
     suspend fun getRecommendAudios(): List<Audio> {

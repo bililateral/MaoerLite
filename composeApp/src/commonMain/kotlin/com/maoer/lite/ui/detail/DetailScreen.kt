@@ -10,6 +10,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -24,21 +26,28 @@ import androidx.compose.ui.unit.dp
 import cafe.adriel.voyager.core.screen.Screen
 import cafe.adriel.voyager.navigator.LocalNavigator
 import coil3.compose.AsyncImage
+import com.maoer.lite.data.manager.PlayerManager
 import com.maoer.lite.data.model.Audio
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
+import org.koin.compose.koinInject
 
-data class DetailScreen(val audio: Audio) : Screen {
+data class DetailScreen(val initialAudio: Audio) : Screen {
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     override fun Content() {
         val navigator = LocalNavigator.current
+        val playerManager = koinInject<PlayerManager>()
+        
+        // Observe Player State
+        val currentAudio by playerManager.currentAudio.collectAsState()
+        val isPlaying by playerManager.isPlaying.collectAsState()
+        val progress by playerManager.progress.collectAsState()
+        
+        // If currentAudio is null (shouldn't happen if navigating from home), fallback to initial
+        val audio = currentAudio ?: initialAudio
+        
         val MaoerPink = Color(0xFFD32F2F)
         val scrollState = rememberScrollState()
         
-        // 播放状态逻辑
-        var isPlaying by remember { mutableStateOf(false) }
-        var progress by remember { mutableStateOf(0.3f) }
         val totalSeconds = remember(audio.duration) {
             val parts = audio.duration.split(":")
             if (parts.size == 2) {
@@ -48,22 +57,8 @@ data class DetailScreen(val audio: Audio) : Screen {
             }
         }
 
-        LaunchedEffect(isPlaying) {
-            if (isPlaying) {
-                while (isActive && progress < 1f) {
-                    delay(100)
-                    val step = 0.1f / totalSeconds.coerceAtLeast(1)
-                    progress = (progress + step).coerceAtMost(1f)
-                    if (progress >= 1f) {
-                        isPlaying = false
-                    }
-                }
-            }
-        }
-
         Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
             // 1. 视差背景图 (Parallax Background)
-            // 随着列表向上滚动，背景图以 0.5 倍速向上移动，产生视差
             AsyncImage(
                 model = audio.coverUrl,
                 contentDescription = null,
@@ -72,8 +67,8 @@ data class DetailScreen(val audio: Audio) : Screen {
                     .fillMaxWidth()
                     .height(400.dp)
                     .graphicsLayer {
-                        translationY = -scrollState.value * 0.5f // 视差核心逻辑
-                        alpha = 1f - (scrollState.value / 600f).coerceAtMost(0.6f) // 慢慢变暗
+                        translationY = -scrollState.value * 0.5f
+                        alpha = 1f - (scrollState.value / 600f).coerceAtMost(0.6f)
                     }
             )
             
@@ -134,7 +129,7 @@ data class DetailScreen(val audio: Audio) : Screen {
                         // 进度条
                         Slider(
                             value = progress,
-                            onValueChange = { progress = it },
+                            onValueChange = { playerManager.seekTo(it) },
                             colors = SliderDefaults.colors(thumbColor = MaoerPink, activeTrackColor = MaoerPink)
                         )
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -148,32 +143,53 @@ data class DetailScreen(val audio: Audio) : Screen {
                         
                         Spacer(Modifier.height(24.dp))
                         
-                        // 播放按钮
-                        IconButton(
-                            onClick = { isPlaying = !isPlaying },
-                            modifier = Modifier.size(72.dp).clip(CircleShape).background(MaoerPink)
+                        // 播放控制区
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(32.dp)
                         ) {
-                            Icon(
-                                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(40.dp)
-                            )
+                            // 上一个
+                            IconButton(
+                                onClick = { playerManager.previous() },
+                                modifier = Modifier.size(48.dp)
+                            ) {
+                                Icon(Icons.Default.SkipPrevious, "Previous", modifier = Modifier.size(32.dp))
+                            }
+
+                            // 播放/暂停
+                            IconButton(
+                                onClick = { if (isPlaying) playerManager.pause() else playerManager.resume() },
+                                modifier = Modifier.size(72.dp).clip(CircleShape).background(MaoerPink)
+                            ) {
+                                Icon(
+                                    imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(40.dp)
+                                )
+                            }
+                            
+                            // 下一个
+                            IconButton(
+                                onClick = { playerManager.next() },
+                                modifier = Modifier.size(48.dp)
+                            ) {
+                                Icon(Icons.Default.SkipNext, "Next", modifier = Modifier.size(32.dp))
+                            }
                         }
                         
-                        // 音频简介，暂时是用来测试滚动效果
                         Spacer(Modifier.height(32.dp))
                         Text(
-                            "简介：\n这是一个用于测试 Compose Multiplatform 视差滚动效果的演示页面。随着向上滑动，顶部的背景图会以较慢的速度移动，产生纵深感。同时，使用了 Kotlin Flow 和 LaunchedEffect 来模拟播放器的进度控制。",
+                            "简介：\n这是一个用于测试 Compose Multiplatform 视差滚动效果的演示页面。随着向上滑动，顶部的背景图会以较慢的速度移动，产生纵深感。已连接全局播放器控制。",
                             style = MaterialTheme.typography.bodyMedium,
                             color = Color.Gray
                         )
-                        Spacer(Modifier.height(200.dp)) // 撑开高度
+                        Spacer(Modifier.height(200.dp))
                     }
                 }
             }
 
-            // 3. 顶部导航栏 (透明背景) - 移到最后以确保在最上层
+            // 3. 顶部导航栏
             TopAppBar(
                 title = {},
                 navigationIcon = {

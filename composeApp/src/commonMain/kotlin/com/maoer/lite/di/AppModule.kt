@@ -1,5 +1,7 @@
 package com.maoer.lite.di
 
+import com.maoer.lite.data.local.KeyValueStorage
+import com.maoer.lite.data.manager.PlayerManager
 import com.maoer.lite.data.repository.MaoerRepository
 import com.maoer.lite.ui.home.HomeViewModel
 import io.ktor.client.HttpClient
@@ -17,8 +19,15 @@ val appModule = module {
             }
         }
     }
+    
+    // Storage
+    single { KeyValueStorage() }
+    
     // Repository
     single { MaoerRepository() }
+    
+    // Player Manager
+    single { PlayerManager(get(), get()) }
     
     // ScreenModel (ViewModel)
     factory { HomeViewModel(get()) }

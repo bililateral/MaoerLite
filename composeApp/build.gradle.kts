@@ -38,6 +38,7 @@ kotlin {
             implementation(compose.components.resources)
             implementation(compose.components.uiToolingPreview)
             implementation(compose.materialIconsExtended)
+            implementation(libs.androidx.datastore.preferences.core)
 
             // 协程
             implementation(libs.kotlinx.coroutines.core)
@@ -69,6 +70,11 @@ kotlin {
             implementation(libs.ktor.client.okhttp)
             // Android 特有的协程
             implementation(libs.kotlinx.coroutines.android)
+
+            // Media3
+            implementation(libs.androidx.media3.exoplayer)
+            implementation(libs.androidx.media3.session)
+            implementation(libs.androidx.media3.common)
         }
 
         // iOS 网络引擎配置

@@ -1,7 +1,6 @@
 package com.maoer.lite.ui.home
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
@@ -41,6 +40,10 @@ import org.koin.compose.koinInject
 /**
  * 首页的 ViewModel。
  * 负责从仓库获取推荐音频列表。
+ *
+ * 输出：
+ * - [state]：推荐列表
+ * - [loading]：加载状态（用于显示转圈）
  */
 class HomeViewModel(private val repository: MaoerRepository) : ScreenModel {
     private val _state = MutableStateFlow<List<Audio>>(emptyList())
@@ -72,6 +75,17 @@ object HomeScreen : Screen {
         val list by viewModel.state.collectAsState()
         val loading by viewModel.loading.collectAsState()
         val navigator = LocalNavigator.current
+        
+        // Provide playlist context once after the list is loaded, so PlayerManager can restore last track/position
+        // without fetching the list again.
+        LaunchedEffect(list) {
+            if (list.isNotEmpty()) {
+                // 首页列表加载完成后，把列表注入到全局 PlayerManager：
+                // - 这样“上一首/下一首”有上下文；
+                // - PlayerManager 才能把 last_audio_id 映射回具体 Audio 并恢复进度。
+                playerManager.setPlaylist(list)
+            }
+        }
         
         // 观察全局播放器状态
         val currentAudio by playerManager.currentAudio.collectAsState()
@@ -120,12 +134,10 @@ object HomeScreen : Screen {
                     ) {
                         items(list) { audio ->
                             AudioItem(audio) {
-                                // 点击项目时：
-                                // 1. 更新播放列表上下文，以便“下一首/上一首”正常工作。
-                                // 2. 开始播放选定的音频。
-                                // 3. 不要导航；让用户使用底部栏进入详情页。
+                                // 点击项目时：跳转详情页并开始播放
                                 playerManager.setPlaylist(list)
                                 playerManager.play(audio)
+                                navigator?.push(DetailScreen(audio))
                             }
                         }
                     }
@@ -156,7 +168,7 @@ fun BottomPlayerBar(
             // 进度条 (细条)
             LinearProgressIndicator(
                 progress = { progress },
-                modifier = Modifier.fillMaxWidth().height(2.dp),
+                modifier = Modifier.fillMaxWidth().height(4.dp),
                 color = Color(0xFFD32F2F),
                 trackColor = Color.Transparent
             )

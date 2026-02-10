@@ -38,6 +38,9 @@ data class DetailScreen(val initialAudio: Audio) : Screen {
         val playerManager = koinInject<PlayerManager>()
         
         // Observe Player State
+        // 这里直接观察全局 PlayerManager 的 StateFlow：
+        // - 详情页与首页底栏会天然保持同步；
+        // - 进度 progress 是 0..1 的比例，与 Slider 的 value 一致。
         val currentAudio by playerManager.currentAudio.collectAsState()
         val isPlaying by playerManager.isPlaying.collectAsState()
         val progress by playerManager.progress.collectAsState()
@@ -49,12 +52,10 @@ data class DetailScreen(val initialAudio: Audio) : Screen {
         val scrollState = rememberScrollState()
         
         val totalSeconds = remember(audio.duration) {
+            // Demo 中 duration 是字符串 "mm:ss"；这里只用于 UI 展示当前时间文本。
+            // 真正的 seek/进度以播放器的 duration/currentPosition 为准。
             val parts = audio.duration.split(":")
-            if (parts.size == 2) {
-                (parts[0].toIntOrNull() ?: 0) * 60 + (parts[1].toIntOrNull() ?: 0)
-            } else {
-                300
-            }
+            if (parts.size == 2) (parts[0].toIntOrNull() ?: 0) * 60 + (parts[1].toIntOrNull() ?: 0) else 300
         }
 
         Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {

@@ -30,6 +30,8 @@ kotlin {
 
     sourceSets {
         commonMain.dependencies {
+            implementation("io.github.pdvrieze.xmlutil:core:0.86.3")
+            implementation("com.squareup.okio:okio:3.9.1")
             // Compose 基础库 (由插件提供便捷访问)
             implementation(compose.runtime)
             implementation(compose.foundation)
@@ -93,8 +95,8 @@ android {
         applicationId = "com.maoer.lite"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1.0-dev"
     }
 
     packaging {

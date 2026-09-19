@@ -12,6 +12,15 @@ import kotlinx.coroutines.flow.asStateFlow
  * iOS 若要达标，需要引入 AVPlayer + 后台音频会话 + 控制中心/锁屏控制等。
  */
 class IosMediaPlayerController : MediaPlayerController {
+    override val playbackSpeed = MutableStateFlow(1f)
+    override val sleepTimer = MutableStateFlow(SleepTimerState())
+    override fun setPlaybackSpeed(speed: Float) { playbackSpeed.value = PlaybackOptions.validSpeed(speed) }
+    override fun setSleepTimer(minutes: Int?) { /* Android-only feature; iOS remains a stub. */ }
+    override val positionMs = MutableStateFlow(0L)
+    override val durationMs = MutableStateFlow(0L)
+    override val buffering = MutableStateFlow(false)
+    override val playbackError = MutableStateFlow<String?>(null)
+    override fun seekToMs(position: Long) { positionMs.value = position }
     private val _isPlaying = MutableStateFlow(false)
     override val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
 

@@ -1,6 +1,9 @@
 package com.maoer.lite
 
 import android.app.Application
+import org.koin.core.context.startKoin
+import com.maoer.lite.di.appModule
+import com.maoer.lite.di.platformModule
 
 class MaoerApplication : Application() {
     companion object {
@@ -20,5 +23,6 @@ class MaoerApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        startKoin { modules(appModule, platformModule) }
     }
 }

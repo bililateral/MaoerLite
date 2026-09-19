@@ -2,168 +2,139 @@ package com.maoer.lite.data.manager
 
 import com.maoer.lite.data.local.KeyValueStorage
 import com.maoer.lite.data.model.Audio
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
-import kotlin.time.Duration.Companion.seconds
-import kotlin.time.TimeSource
+import com.maoer.lite.data.library.ListeningLibrary
+import com.maoer.lite.data.library.ListeningPolicy
+import com.maoer.lite.data.podcast.PodcastRepository
+import com.maoer.lite.data.download.Downloads
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
-/**
- * 管理应用程序的全局音频播放状态（跨页面共享）。
- *
- * 这个单例类（通过 Koin 注入）处理：
- * 1. 维护当前播放曲目 [currentAudio] 与播放列表上下文（用于上一首/下一首）。
- * 2. 将“播放/暂停/切歌/拖动进度”等意图转发给平台侧的 [MediaPlayerController]。
- * 3. 将最后播放的音频 ID 与进度持久化到 DataStore，以便下次启动恢复。
- *
- * 设计取舍（为什么不在这里拉取推荐列表）：
- * - 首页已经会加载推荐列表。如果 PlayerManager 也在 init 再拉一次，会造成重复请求与潜在不一致。
- * - PlayerManager 只负责“收到列表后建立上下文”，因此这里等待 UI 调用 [setPlaylist] 注入列表。
- *
- * 恢复逻辑：
- * - init 只读取 last_audio_id/last_audio_progress 并暂存；
- * - 等到 [setPlaylist] 被调用且 restore 信息已读完后，再选择要 prepare 的音频并恢复进度；
- * - prepare/seek 可能在 Android MediaController 未就绪前发生，Android 侧会缓存命令并在连接后重放。
- */
-class PlayerManager(
-    private val storage: KeyValueStorage,
-    private val mediaController: MediaPlayerController
-) {
-    // 后台任务的作用域
+@Serializable
+data class PlaybackSnapshot(val queue: List<Audio>, val currentId: String, val positionMs: Long, val speed: Float = 1f)
+
+/** UI selects a queue; actual playing/position/error state always comes from Media3. */
+class PlayerManager(private val storage: KeyValueStorage, private val mediaController: MediaPlayerController,
+    private val library: ListeningLibrary, private val podcasts: PodcastRepository, private val downloads: Downloads) {
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-
-    // 当前选中的音频曲目。
+    private val json = Json { ignoreUnknownKeys = true }
     private val _currentAudio = MutableStateFlow<Audio?>(null)
     val currentAudio = _currentAudio.asStateFlow()
-
-    // 委托给 MediaPlayerController 的状态
     val isPlaying = mediaController.isPlaying
     val progress = mediaController.currentProgress
-
-    // 本地播放列表上下文
+    val positionMs = mediaController.positionMs
+    val durationMs = mediaController.durationMs
+    val buffering = mediaController.buffering
+    val playbackError = mediaController.playbackError
+    val playbackSpeed = mediaController.playbackSpeed
+    val sleepTimer = mediaController.sleepTimer
+    private val _queue = MutableStateFlow<List<Audio>>(emptyList())
+    val queue = _queue.asStateFlow()
     private var playlist: List<Audio> = emptyList()
-    private var playlistIds: List<String> = emptyList()
-
-    // 从本地读取到的“上次播放快照”。只有在 playlist 已知后才能映射到具体 Audio 对象。
-    private var pendingRestoreId: String? = null
-    private var pendingRestoreProgress: Float? = null
-    // 只有 restore 信息读取完成后才允许挑选“默认曲目”，否则可能覆盖掉真正要恢复的 last_id。
-    private var restoreInfoLoaded: Boolean = false
+    private var userSelected = false
+    private var selectionJob: Job? = null
+    private val _libraryError = MutableStateFlow<String?>(null)
+    val libraryError = _libraryError.asStateFlow()
 
     init {
         scope.launch {
-            // 只读取恢复信息，等待 UI 提供 playlist（避免重复拉取推荐列表与竞态丢指令）。
-            pendingRestoreId = storage.getString("last_audio_id")
-            pendingRestoreProgress = storage.getString("last_audio_progress")?.toFloatOrNull()?.coerceIn(0f, 1f)
-            restoreInfoLoaded = true
-            maybeApplyRestore()
-        }
-
-        // 监听控制器的音频ID变化，更新当前音频对象
-        scope.launch {
-            mediaController.currentAudioId.collect { id ->
-                if (id != null) {
-                    val audio = playlist.find { it.id == id }
-                    if (audio != null) {
-                        _currentAudio.value = audio
-                        storage.saveString("last_audio_id", id)
+            optional { downloads.awaitReady() }
+            val saved = optional { storage.getString(SNAPSHOT_KEY)?.let { json.decodeFromString<PlaybackSnapshot>(it) } }
+            if (!userSelected && saved != null) {
+                val audio = saved.queue.find { it.id == saved.currentId }?.let { enrich(it) }
+                if (audio != null) {
+                    if (userSelected) return@launch
+                    // Older installs only have the last queue snapshot. Preserve that progress once.
+                    // Timestamp 1 means historical time unknown; don't pretend restoration is a new listen.
+                    optional {
+                        if (saved.positionMs > 0 && library.entry(audio.id) == null)
+                            library.record(audio, saved.positionMs, 0, 1)
+                    }
+                    playlist = saved.queue.map { if (it.id == audio.id) audio else it }
+                    _queue.value = playlist
+                    mediaController.setPlaylist(playlist)
+                    _currentAudio.value = audio
+                    // A reconnect to an already-playing service must not reset its position.
+                    if (mediaController.currentAudioId.value == null) {
+                        mediaController.setPlaybackSpeed(PlaybackOptions.validSpeed(saved.speed))
+                        mediaController.prepare(audio)
+                        mediaController.seekToMs(saved.positionMs)
                     }
                 }
             }
         }
-
-        // 监听进度并保存 (降低频率，例如只在暂停或特定间隔保存，这里简化为随流更新，实际 Controller 可能已经做了)
         scope.launch {
-            // App 被划掉/进程被回收时不一定会触发 pause()，因此这里做一个低频持久化兜底。
-            // Android 端真实播放在 Service 中，也会在 onTaskRemoved/onDestroy 额外保存一次。
-            val saveInterval = 5.seconds
-            var lastSaved = TimeSource.Monotonic.markNow() - saveInterval
-            progress.collect { p ->
-                if (!isPlaying.value) return@collect
-                if (lastSaved.elapsedNow() < saveInterval) return@collect
-                lastSaved = TimeSource.Monotonic.markNow()
-                // 保存的是比例 0..1（而不是毫秒），恢复时由平台侧换算成 seekTo(positionMs)。
-                storage.saveString("last_audio_progress", p.toString())
+            mediaController.currentAudioId.collectLatest { id ->
+                playlist.find { it.id == id }?.let {
+                    _currentAudio.value = it
+                    val enriched = enrich(it)
+                    if (mediaController.currentAudioId.value == id) _currentAudio.value = enriched
+                }
             }
         }
+        // Service also persists this format independently of the UI lifecycle.
     }
 
     fun setPlaylist(list: List<Audio>) {
-        val ids = list.map { it.id }
-        if (ids == playlistIds) return
-
-        playlistIds = ids
-        this.playlist = list
+        userSelected = true
+        if (list == playlist) return
+        playlist = list
+        _queue.value = list
         mediaController.setPlaylist(list)
-
-        // Don't guess a track until restore info is loaded; otherwise we may lose "last played" restore.
-        if (restoreInfoLoaded) maybeApplyRestore()
     }
-
-    private fun maybeApplyRestore() {
-        if (!restoreInfoLoaded) return
-        if (_currentAudio.value != null) return
-        if (playlist.isEmpty()) return
-
-        val restoreId = pendingRestoreId
-        val chosen = restoreId?.let { id -> playlist.find { it.id == id } } ?: playlist.first()
-        _currentAudio.value = chosen
-
-        // Prepare (no autoplay) + restore seek.
-        mediaController.prepare(chosen)
-        pendingRestoreProgress?.let { p -> mediaController.seekTo(p) }
-
-        pendingRestoreId = null
-        pendingRestoreProgress = null
-    }
-
     fun play(audio: Audio) {
-        // 如果是新的音频，更新当前引用并通知控制器播放
-        if (_currentAudio.value?.id != audio.id) {
-            _currentAudio.value = audio
-            scope.launch {
-                storage.saveString("last_audio_id", audio.id)
-            }
+        userSelected = true
+        selectionJob?.cancel()
+        selectionJob = scope.launch {
+            try {
+                _libraryError.value = null
+                val enriched = enrich(audio)
+                optional { library.rememberAudio(enriched) }
+                val same = mediaController.currentAudioId.value == audio.id
+                val entry = optional { library.entry(audio.id) }
+                val start = ListeningPolicy.resumePosition(entry)
+                if (entry?.completed == true) optional { library.restart(enriched) }
+                optional { downloads.awaitReady() }
+                if (playlist.none { it.id == audio.id }) setPlaylist(listOf(enriched))
+                _currentAudio.value = enriched
+                mediaController.play(enriched)
+                if (!same || entry?.completed == true) mediaController.seekToMs(start)
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { _libraryError.value = "无法保存续听记录，请检查存储空间后重试" }
         }
-        mediaController.play(audio)
     }
-
+    private suspend fun enrich(audio: Audio): Audio {
+        val saved = optional { library.entry(audio.id)?.audio }
+        val cached = if (audio.podcastId.isNotBlank()) optional { podcasts.cached(audio.podcastId) } else null
+        return cached?.episodes?.find { it.id == audio.id }?.asAudio(cached) ?: saved ?: audio
+    }
+    private suspend fun <T> optional(block: suspend () -> T): T? = try { block() }
+        catch (e: CancellationException) { throw e }
+        catch (_: Exception) { _libraryError.value = "本地记录暂不可用，播放可继续；原记录已保留"; null }
     fun resume() {
-        mediaController.resume()
+        val audio = currentAudio.value
+        if (audio != null && library.entries.value.any { it.audio.id == audio.id && it.completed }) play(audio)
+        else mediaController.resume()
     }
-
-    fun pause() {
-        mediaController.pause()
-        scope.launch {
-            storage.saveString("last_audio_progress", progress.value.toString())
-        }
-    }
-
+    fun pause() { selectionJob?.cancel(); mediaController.pause() }
     fun next() {
-        val current = _currentAudio.value ?: return
-        val index = playlist.indexOfFirst { it.id == current.id }
-        if (index != -1 && playlist.isNotEmpty()) {
-            val nextIndex = (index + 1) % playlist.size
-            play(playlist[nextIndex])
-        }
+        val index = playlist.indexOfFirst { it.id == _currentAudio.value?.id }
+        if (index >= 0) play(playlist[QueueNavigation.nextIndex(index, playlist.size)])
     }
-
     fun previous() {
-        val current = _currentAudio.value ?: return
-        val index = playlist.indexOfFirst { it.id == current.id }
-        if (index != -1 && playlist.isNotEmpty()) {
-            val prevIndex = if (index - 1 < 0) playlist.size - 1 else index - 1
-            play(playlist[prevIndex])
-        }
+        val index = playlist.indexOfFirst { it.id == _currentAudio.value?.id }
+        if (index >= 0) play(playlist[QueueNavigation.previousIndex(index, playlist.size)])
     }
-
-    fun seekTo(value: Float) {
-        mediaController.seekTo(value)
-        scope.launch {
-             storage.saveString("last_audio_progress", value.toString())
-        }
+    fun seekBy(deltaMs: Long) {
+        mediaController.seekToMs((positionMs.value + deltaMs).coerceIn(0L, durationMs.value.coerceAtLeast(0)))
     }
+    fun seekTo(value: Float) = mediaController.seekTo(value)
+    fun setPlaybackSpeed(speed: Float) = mediaController.setPlaybackSpeed(PlaybackOptions.validSpeed(speed))
+    fun setSleepTimer(minutes: Int?) {
+        require(minutes == null || minutes == -1 || minutes in 1..180)
+        mediaController.setSleepTimer(minutes)
+    }
+    companion object { const val SNAPSHOT_KEY = "playback_snapshot_v2" }
 }

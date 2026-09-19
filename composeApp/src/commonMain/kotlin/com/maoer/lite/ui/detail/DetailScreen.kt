@@ -23,14 +23,17 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import cafe.adriel.voyager.core.screen.Screen
 import cafe.adriel.voyager.navigator.LocalNavigator
 import coil3.compose.AsyncImage
 import com.maoer.lite.data.manager.PlayerManager
-import com.maoer.lite.data.model.Audio
+import com.maoer.lite.ui.library.ListeningActions
 import org.koin.compose.koinInject
 
-data class DetailScreen(val initialAudio: Audio) : Screen {
+// Voyager saves screens in Android instance state; keep live audio objects in PlayerManager.
+object DetailScreen : Screen {
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     override fun Content() {
@@ -45,18 +48,24 @@ data class DetailScreen(val initialAudio: Audio) : Screen {
         val isPlaying by playerManager.isPlaying.collectAsState()
         val progress by playerManager.progress.collectAsState()
         
-        // If currentAudio is null (shouldn't happen if navigating from home), fallback to initial
-        val audio = currentAudio ?: initialAudio
+        val audio = currentAudio
+        if (audio == null) {
+            Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center) {
+                Text("还没有正在收听的节目")
+                TextButton(onClick = { navigator?.pop() }) { Text("返回") }
+            }
+            return
+        }
         
         val MaoerPink = Color(0xFFD32F2F)
         val scrollState = rememberScrollState()
         
-        val totalSeconds = remember(audio.duration) {
-            // Demo 中 duration 是字符串 "mm:ss"；这里只用于 UI 展示当前时间文本。
-            // 真正的 seek/进度以播放器的 duration/currentPosition 为准。
-            val parts = audio.duration.split(":")
-            if (parts.size == 2) (parts[0].toIntOrNull() ?: 0) * 60 + (parts[1].toIntOrNull() ?: 0) else 300
-        }
+        val durationMs by playerManager.durationMs.collectAsState()
+        val positionMs by playerManager.positionMs.collectAsState()
+        val playbackError by playerManager.playbackError.collectAsState()
+        val buffering by playerManager.buffering.collectAsState()
+        var dragPosition by remember(audio.id) { mutableStateOf<Float?>(null) }
 
         Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
             // 1. 视差背景图 (Parallax Background)
@@ -108,6 +117,9 @@ data class DetailScreen(val initialAudio: Audio) : Screen {
                         Text(audio.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(8.dp))
                         Text(audio.author, style = MaterialTheme.typography.bodyLarge, color = Color.Gray)
+                        ListeningActions(audio)
+                        val libraryError by playerManager.libraryError.collectAsState()
+                        libraryError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                         
                         Spacer(Modifier.height(32.dp))
                         
@@ -129,19 +141,26 @@ data class DetailScreen(val initialAudio: Audio) : Screen {
                         
                         // 进度条
                         Slider(
-                            value = progress,
-                            onValueChange = { playerManager.seekTo(it) },
+                            modifier = Modifier.semantics { contentDescription = "播放进度" },
+                            value = dragPosition ?: progress,
+                            enabled = durationMs > 0,
+                            onValueChange = { dragPosition = it },
+                            onValueChangeFinished = { dragPosition?.let(playerManager::seekTo); dragPosition = null },
                             colors = SliderDefaults.colors(thumbColor = MaoerPink, activeTrackColor = MaoerPink)
                         )
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            val currentSecondsVal = (progress * totalSeconds).toInt()
-                            val m = currentSecondsVal / 60
-                            val s = currentSecondsVal % 60
-                            val timeStr = "${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}"
-                            Text(timeStr, style = MaterialTheme.typography.bodySmall)
-                            Text(audio.duration, style = MaterialTheme.typography.bodySmall)
+                            Text(com.maoer.lite.data.podcast.formatDuration((dragPosition?.let { (it * durationMs).toLong() } ?: positionMs) / 1000), style = MaterialTheme.typography.bodySmall)
+                            Text(if (durationMs > 0) com.maoer.lite.data.podcast.formatDuration(durationMs / 1000) else "--:--", style = MaterialTheme.typography.bodySmall)
                         }
-                        
+                        if (buffering) {
+                            LinearProgressIndicator(Modifier.fillMaxWidth())
+                            Text("正在缓冲…", style = MaterialTheme.typography.labelMedium)
+                        }
+                        playbackError?.let { message ->
+                            Text(message, color = MaterialTheme.colorScheme.error)
+                            TextButton(onClick = playerManager::resume) { Text("重试播放") }
+                        }
+
                         Spacer(Modifier.height(24.dp))
                         
                         // 播放控制区
@@ -154,7 +173,7 @@ data class DetailScreen(val initialAudio: Audio) : Screen {
                                 onClick = { playerManager.previous() },
                                 modifier = Modifier.size(48.dp)
                             ) {
-                                Icon(Icons.Default.SkipPrevious, "Previous", modifier = Modifier.size(32.dp))
+                                Icon(Icons.Default.SkipPrevious, "上一集", modifier = Modifier.size(32.dp))
                             }
 
                             // 播放/暂停
@@ -164,7 +183,7 @@ data class DetailScreen(val initialAudio: Audio) : Screen {
                             ) {
                                 Icon(
                                     imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                    contentDescription = null,
+                                    contentDescription = if (isPlaying) "暂停" else "播放",
                                     tint = Color.White,
                                     modifier = Modifier.size(40.dp)
                                 )
@@ -175,13 +194,19 @@ data class DetailScreen(val initialAudio: Audio) : Screen {
                                 onClick = { playerManager.next() },
                                 modifier = Modifier.size(48.dp)
                             ) {
-                                Icon(Icons.Default.SkipNext, "Next", modifier = Modifier.size(32.dp))
+                                Icon(Icons.Default.SkipNext, "下一集", modifier = Modifier.size(32.dp))
                             }
                         }
                         
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                            TextButton(onClick = { playerManager.seekBy(-15_000) }, enabled = durationMs > 0) { Text("后退 15 秒") }
+                            TextButton(onClick = { playerManager.seekBy(30_000) }, enabled = durationMs > 0) { Text("前进 30 秒") }
+                        }
+                        Spacer(Modifier.height(16.dp))
+                        PlaybackTools(playerManager)
                         Spacer(Modifier.height(32.dp))
                         Text(
-                            "简介：\n这是一个用于测试 Compose Multiplatform 视差滚动效果的演示页面。随着向上滑动，顶部的背景图会以较慢的速度移动，产生纵深感。已连接全局播放器控制。",
+                            audio.description.ifBlank { "本集暂无简介" },
                             style = MaterialTheme.typography.bodyMedium,
                             color = Color.Gray
                         )
@@ -198,7 +223,7 @@ data class DetailScreen(val initialAudio: Audio) : Screen {
                         onClick = { navigator?.pop() },
                         colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.3f))
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = Color.White)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)

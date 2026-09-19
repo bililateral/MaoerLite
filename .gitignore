@@ -17,3 +17,11 @@ captures
 !*.xcworkspace/contents.xcworkspacedata
 **/xcshareddata/WorkspaceSettings.xcsettings
 node_modules/
+
+# Local Python audit caches
+__pycache__/
+*.pyc
+
+# Local investigation output (not application sources)
+.playwright-mcp/
+.local/

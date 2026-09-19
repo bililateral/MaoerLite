@@ -11,5 +11,7 @@ data class Audio(
     val coverUrl: String,
     // UI 展示用时长（字符串）。真实播放器的 duration 以 Media3/AVPlayer 为准。
     val duration: String = "00:00",
-    val audioUrl: String
+    val audioUrl: String,
+    val description: String = "",
+    val podcastId: String = ""
 )

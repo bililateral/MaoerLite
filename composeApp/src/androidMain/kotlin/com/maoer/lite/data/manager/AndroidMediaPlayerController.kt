@@ -4,17 +4,23 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Bundle
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import androidx.media3.session.SessionCommand
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import com.maoer.lite.MaoerApplication
 import com.maoer.lite.data.model.Audio
+import com.maoer.lite.data.download.Downloads
 import com.maoer.lite.service.MaoerPlaybackService
+import com.maoer.lite.service.PlaybackCommands
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
@@ -41,8 +47,44 @@ import java.util.concurrent.ExecutionException
  * - progress 用 0.0..1.0 的比例表示（与 [MediaPlayerController.currentProgress] 定义一致）。
  * - 播放列表切歌时尽量避免反复 setMediaItems + prepare：列表不变时优先 seekTo(index, 0)。
  */
-class AndroidMediaPlayerController : MediaPlayerController {
+class AndroidMediaPlayerController(private val downloads: Downloads) : MediaPlayerController {
 
+    private val _playbackSpeed = MutableStateFlow(1f)
+    override val playbackSpeed = _playbackSpeed.asStateFlow()
+    private val _sleepTimer = MutableStateFlow(SleepTimerState())
+    override val sleepTimer = _sleepTimer.asStateFlow()
+    private var pendingSpeed: Float? = null
+    private var pendingTimerMinutes: Int? = null
+
+    override fun setPlaybackSpeed(speed: Float) {
+        val valid = PlaybackOptions.validSpeed(speed)
+        val controller = mediaController
+        if (controller == null) pendingSpeed = valid else controller.setPlaybackSpeed(valid)
+    }
+
+    override fun setSleepTimer(minutes: Int?) {
+        val value = minutes ?: 0
+        val controller = mediaController
+        if (controller == null) { pendingTimerMinutes = value; return }
+        controller.sendCustomCommand(SessionCommand(PlaybackCommands.SLEEP_TIMER, Bundle.EMPTY),
+            Bundle().apply { putInt(PlaybackCommands.MINUTES, value) })
+    }
+
+    private fun updateSleepTimer(extras: Bundle) {
+        _sleepTimer.value = SleepTimerState(extras.getLong(PlaybackCommands.REMAINING_MS),
+            extras.getBoolean(PlaybackCommands.END_OF_EPISODE))
+    }
+
+    private val _positionMs = MutableStateFlow(0L)
+    override val positionMs = _positionMs.asStateFlow()
+    private val _durationMs = MutableStateFlow(0L)
+    override val durationMs = _durationMs.asStateFlow()
+    private val _buffering = MutableStateFlow(false)
+    override val buffering = _buffering.asStateFlow()
+    private val _playbackError = MutableStateFlow<String?>(null)
+    override val playbackError = _playbackError.asStateFlow()
+    private var pendingSeekMs: Long? = null
+    private var pendingPlayWhenReady: Boolean? = null
     private val context: Context = MaoerApplication.instance
     private var mediaControllerFuture: ListenableFuture<MediaController>? = null
     private var mediaController: MediaController? = null
@@ -74,16 +116,19 @@ class AndroidMediaPlayerController : MediaPlayerController {
 
     init {
         val sessionToken = SessionToken(context, ComponentName(context, MaoerPlaybackService::class.java))
-        mediaControllerFuture = MediaController.Builder(context, sessionToken).buildAsync()
+        mediaControllerFuture = MediaController.Builder(context, sessionToken)
+            .setListener(object : MediaController.Listener {
+                override fun onExtrasChanged(controller: MediaController, extras: Bundle) { updateSleepTimer(extras) }
+            }).buildAsync()
         mediaControllerFuture?.addListener({
             try {
                 mediaController = mediaControllerFuture?.get()
                 setupControllerListener()
                 applyPendingCommands()
             } catch (e: ExecutionException) {
-                e.printStackTrace()
+                _playbackError.value = "连接播放器失败，请重新打开应用"
             } catch (e: InterruptedException) {
-                e.printStackTrace()
+                _playbackError.value = "连接播放器失败，请重新打开应用"
             }
         }, MoreExecutors.directExecutor())
 
@@ -94,21 +139,24 @@ class AndroidMediaPlayerController : MediaPlayerController {
     override fun setPlaylist(playlist: List<Audio>) {
         this.playlist = playlist
         playlistIds = playlist.map { it.id }
-        playlistHash = playlistIds.hashCode()
+        playlistHash = 31 * playlist.hashCode() + playlist.map { downloads.localUri(it.id) }.hashCode()
         playlistMediaItems = playlist.map { a ->
             val metadata = MediaMetadata.Builder()
                 .setTitle(a.title)
                 .setArtist(a.author)
+                .setDescription(a.description.take(512))
+                .setAlbumTitle(a.podcastId)
+                .setExtras(Bundle().apply { putString("originalAudioUrl", a.audioUrl) })
                 .setArtworkUri(Uri.parse(a.coverUrl))
                 .build()
             MediaItem.Builder()
                 .setMediaId(a.id)
-                .setUri(a.audioUrl)
+                .setUri(downloads.localUri(a.id) ?: a.audioUrl)
                 .setMediaMetadata(metadata)
                 .build()
         }
         // Force next play/prepare to (re)apply the queue if needed.
-        queueHash = 0
+        // queueHash tracks the actually installed queue, including resolved download paths.
     }
 
     private fun setupControllerListener() {
@@ -117,18 +165,32 @@ class AndroidMediaPlayerController : MediaPlayerController {
         // 初始化状态
         _isPlaying.value = controller.isPlaying
         _currentAudioId.value = controller.currentMediaItem?.mediaId
+        _playbackSpeed.value = controller.playbackParameters.speed
+        updateSleepTimer(controller.sessionExtras)
         
         controller.addListener(object : Player.Listener {
+            override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
+                _playbackSpeed.value = playbackParameters.speed
+            }
+            override fun onPlayerError(error: PlaybackException) {
+                _buffering.value = false
+                _playbackError.value = "播放失败，请检查网络或重试（${error.errorCodeName}）"
+            }
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 _isPlaying.value = isPlaying
             }
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 _currentAudioId.value = mediaItem?.mediaId
+                _positionMs.value = 0L
+                _durationMs.value = 0L
+                _currentProgress.value = 0f
                 maybeApplyPendingSeek(controller)
             }
             
             override fun onPlaybackStateChanged(playbackState: Int) {
+                _buffering.value = playbackState == Player.STATE_BUFFERING
+                if (playbackState == Player.STATE_READY) _playbackError.value = null
                 if (playbackState == Player.STATE_READY) {
                     maybeApplyPendingSeek(controller)
                 }
@@ -142,6 +204,13 @@ class AndroidMediaPlayerController : MediaPlayerController {
     }
 
     override fun play(audio: Audio) {
+        // Re-resolve files on every selection; deleted downloads must fall back to the feed URL.
+        setPlaylist(playlist)
+        _playbackError.value = null
+        pendingPrepareAudio = null
+        pendingPlayWhenReady = true
+        pendingSeekFraction = null
+        pendingSeekMs = null
         // Ensure the session service is started (not only bound).
         ensureServiceStarted()
 
@@ -154,7 +223,15 @@ class AndroidMediaPlayerController : MediaPlayerController {
 
         // 如果 ID 相同，只需 resume
         if (controller.currentMediaItem?.mediaId == audio.id) {
+            val index = playlistIds.indexOf(audio.id)
+            if (index >= 0 && queueHash != playlistHash) {
+                val position = controller.currentPosition
+                controller.setMediaItems(playlistMediaItems, index, position)
+                queueHash = playlistHash
+                controller.prepare()
+            }
             if (!controller.isPlaying) {
+                if (controller.playbackState == Player.STATE_IDLE || controller.playbackState == Player.STATE_ENDED) controller.prepare()
                 controller.play()
             }
             return
@@ -185,6 +262,9 @@ class AndroidMediaPlayerController : MediaPlayerController {
     }
 
     override fun prepare(audio: Audio) {
+        setPlaylist(playlist)
+        pendingPlayAudio = null
+        pendingPlayWhenReady = false
         ensureServiceStarted()
 
         val controller = mediaController
@@ -219,11 +299,14 @@ class AndroidMediaPlayerController : MediaPlayerController {
     }
 
     override fun pause() {
+        pendingPlayWhenReady = false
         mediaController?.pause()
     }
 
     override fun resume() {
-        mediaController?.play()
+        pendingPlayWhenReady = true
+        _playbackError.value = null
+        mediaController?.let { if (it.playbackState == Player.STATE_IDLE || it.playbackState == Player.STATE_ENDED) it.prepare(); it.play() }
     }
 
     override fun seekTo(position: Float) {
@@ -246,6 +329,12 @@ class AndroidMediaPlayerController : MediaPlayerController {
         controller.seekTo((p * duration).toLong())
     }
 
+    override fun seekToMs(position: Long) {
+        pendingSeekFraction = null
+        pendingSeekMs = position.coerceAtLeast(0L)
+        mediaController?.let { maybeApplyPendingSeek(it) }
+    }
+
     override fun release() {
         progressJob?.cancel()
         scope.cancel()
@@ -259,6 +348,8 @@ class AndroidMediaPlayerController : MediaPlayerController {
             while (isActive) {
                 val controller = mediaController
                 if (controller != null) {
+                    _positionMs.value = controller.currentPosition.coerceAtLeast(0)
+                    _durationMs.value = controller.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: 0
                     val total = controller.duration
                     if (total != C.TIME_UNSET && total > 0L) {
                         val current = controller.currentPosition.coerceIn(0L, total)
@@ -284,6 +375,11 @@ class AndroidMediaPlayerController : MediaPlayerController {
     }
 
     private fun maybeApplyPendingSeek(controller: MediaController) {
+        pendingSeekMs?.let { position ->
+            if (controller.mediaItemCount == 0 || controller.playbackState != Player.STATE_READY) return
+            pendingSeekMs = null
+            controller.seekTo(position.coerceAtMost(controller.duration.takeIf { it > 0 } ?: Long.MAX_VALUE))
+        }
         val fraction = pendingSeekFraction ?: return
         val duration = controller.duration
         if (duration == C.TIME_UNSET || duration <= 0L) return
@@ -300,6 +396,18 @@ class AndroidMediaPlayerController : MediaPlayerController {
     private fun applyPendingCommands() {
         val controller = mediaController ?: return
 
+        // A fresh UI/controller can reconnect while the service is still playing.
+        // Discard only the startup restore; explicit user play remains authoritative.
+        if (controller.currentMediaItem != null && pendingPrepareAudio != null && pendingPlayAudio == null) {
+            pendingPrepareAudio = null
+            pendingSeekMs = null
+            pendingSeekFraction = null
+            pendingPlayWhenReady = null
+            pendingSpeed = null
+        }
+        val finalPlayWhenReady = pendingPlayWhenReady
+        val restorePosition = pendingSeekMs
+        val restoreFraction = pendingSeekFraction
         pendingPrepareAudio?.let { audio ->
             pendingPrepareAudio = null
             // Safe: controller is ready now, prepare will execute immediately.
@@ -311,7 +419,15 @@ class AndroidMediaPlayerController : MediaPlayerController {
             play(audio)
         }
 
-        // pendingSeekFraction is applied when duration becomes available (STATE_READY).
+        pendingSeekMs = restorePosition
+        pendingSeekFraction = restoreFraction
+        finalPlayWhenReady?.let { controller.playWhenReady = it }
+        pendingPlayWhenReady = null
+        // Pending seek is applied once READY.
         maybeApplyPendingSeek(controller)
+        pendingSpeed?.let { controller.setPlaybackSpeed(it) }
+        pendingSpeed = null
+        pendingTimerMinutes?.let { setSleepTimer(it.takeUnless { value -> value == 0 }) }
+        pendingTimerMinutes = null
     }
 }

@@ -4,6 +4,16 @@ import com.maoer.lite.data.model.Audio
 import kotlinx.coroutines.flow.StateFlow
 
 interface MediaPlayerController {
+    val playbackSpeed: StateFlow<Float>
+    val sleepTimer: StateFlow<SleepTimerState>
+    fun setPlaybackSpeed(speed: Float)
+    /** null cancels; -1 pauses when the current episode naturally finishes. */
+    fun setSleepTimer(minutes: Int?)
+    val positionMs: StateFlow<Long>
+    val durationMs: StateFlow<Long>
+    val buffering: StateFlow<Boolean>
+    val playbackError: StateFlow<String?>
+    fun seekToMs(position: Long)
     val isPlaying: StateFlow<Boolean>
     /**
      * 当前播放进度（0.0..1.0）。

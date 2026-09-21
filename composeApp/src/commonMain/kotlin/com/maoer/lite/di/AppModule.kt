@@ -3,6 +3,7 @@ package com.maoer.lite.di
 import com.maoer.lite.data.local.KeyValueStorage
 import com.maoer.lite.data.local.getAppDataStore
 import com.maoer.lite.data.manager.PlayerManager
+import com.maoer.lite.data.agent.*
 import com.maoer.lite.data.library.ListeningLibrary
 import com.maoer.lite.data.library.FileLibraryPersistence
 import com.maoer.lite.data.podcast.*
@@ -47,6 +48,10 @@ val appModule = module {
     // Player Manager
     // 全局播放器状态管理器：跨页面共享（首页底栏/详情页共用）。
     single { PlayerManager(get(), get(), get(), get(), get()) }
+    single { AgentStorage() }
+    single { AgentApi(get()) }
+    single { AgentTools(get(), get(), get(), get()) }
+    single { AgentSession(get(), get(), get()) }
     
     // ScreenModel (ViewModel)
     factory { HomeViewModel(get()) }

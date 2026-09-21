@@ -23,6 +23,7 @@ class PlayerManager(private val storage: KeyValueStorage, private val mediaContr
     private val _currentAudio = MutableStateFlow<Audio?>(null)
     val currentAudio = _currentAudio.asStateFlow()
     val isPlaying = mediaController.isPlaying
+    val playbackAudioId = mediaController.currentAudioId
     val progress = mediaController.currentProgress
     val positionMs = mediaController.positionMs
     val durationMs = mediaController.durationMs

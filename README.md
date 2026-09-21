@@ -2,7 +2,7 @@
 
 **听见，另一种生活。**
 
-MaoerLite 是一款以公开 RSS 为内容入口的 Android 播客点播器。使用 Compose Multiplatform 构建界面、Kotlin Multiplatform 组织业务逻辑，提供杂志风首页、分类浏览、中文与拼音搜索，以及可保存收听进度的播放器。新增文字 AI 助手通过本地 Python 服务理解请求，由手机查询真实目录、RSS 并执行播放操作。
+MaoerLite 是一款以公开 RSS 为内容入口的 Android 播客点播器。使用 Compose Multiplatform 构建界面、Kotlin Multiplatform 组织业务逻辑，提供杂志风首页、分类浏览、中文与拼音搜索，以及可保存收听进度的播放器。新增文字 AI 助手通过本机或内网 Python 服务理解请求，由手机查询真实目录、RSS 并执行播放操作。
 
 当前版本：**1.1.0-dev**（versionCode 2）。内置目录包含 **30 个节目、19 个分类**，节目分集从真实 RSS 加载。本阶段交付 Android；iOS 保留工程入口及接口存根，尚未完成播放能力。
 
@@ -229,11 +229,11 @@ composeApp/build/outputs/apk/debug/composeApp-debug.apk
 
 应用包名为 `com.maoer.lite`。运行时需要联网加载未缓存的 RSS、封面与音频。业务构建不依赖本地维护工具或验收脚本。
 
-## 本地 Agent 服务端（Python）
+## Agent 服务端（Python）
 
 `agent-server/` 使用 FastAPI、Uvicorn 和 HTTPX，通过用户配置的 OpenAI 兼容中转站调用 `deepseek-v4-flash-0731`，在模型网关上运行 LangGraph 任务流程。模型节点生成回复或工具调用，设备节点中断等待 Android 回执，收到结果后从 SQLite 检查点继续。langchain-core 用于运行上下文和基础协议，未引入完整 LangChain Agent。
 
-服务只监听 `127.0.0.1:8787`，适用于本机开发。上游 Base URL、模型和 Key 从本机配置加载，客户端不能覆盖已配置模型，不会自动切换供应商或其他模型。当前中转站为 `https://www.dafangyuntu.com/ai/v1`；费用和额度由中转站账户决定，不沿用此前智谱免费模型的承诺。
+默认监听 `127.0.0.1:8787`，用于本机开发；通过 `AGENT_HOST` 可改为服务器实际持有的私网 IPv4 地址，`AGENT_PORT` 指定端口。当前仅接受回环和 RFC1918 私网监听地址。上游 Base URL、模型和 Key 从本机配置加载，客户端不能覆盖已配置模型，不会自动切换供应商或其他模型。当前中转站为 `https://www.dafangyuntu.com/ai/v1`；费用和额度由中转站账户决定，不沿用此前智谱免费模型的承诺。
 
 ### 初始化与启动
 
@@ -278,11 +278,49 @@ AGENT_API_KEY=你的中转站密钥
 adb -s emulator-5554 reverse tcp:8787 tcp:8787
 ```
 
-真机使用对应的设备序列号。随后在首页进入“AI 助手”，打开右上角连接设置，把本机 `.local/agent-server.token` 中的**本地访问令牌**填入并保存。地址固定为 `http://127.0.0.1:8787`；重新启动设备或 ADB 后可能需要重新建立端口转发。手机不填写上游 API Key；更换服务端模型也不必更换本地令牌。
+真机使用对应的设备序列号。随后在首页进入“AI 助手”，打开右上角连接设置，把本机 `.local/agent-server.token` 中的**本地访问令牌**填入并保存。本机调试的地址填 `http://127.0.0.1:8787`；重新启动设备或 ADB 后可能需要重新建立端口转发。内网部署则填写服务器的完整地址，手机需要连入可达的同一内网或 VPN，端口放行后不需要 ADB。手机不填写上游 API Key；更换服务端模型也不必更换本地令牌。
 
 若已填写正确令牌却提示无法连接，先确认电脑服务正在运行，再执行 `adb -s emulator-5554 reverse --list`。列表中应有 `tcp:8787 tcp:8787`；若没有，重新执行上面的转发命令，然后在助手中点击“恢复连接”。页面按钮恢复的是原任务，无法自行重建电脑端 ADB 转发。恢复后若显示“模型当前繁忙”，则连接已到达服务端，但上游模型暂不可用。
 
-手机把连接配置、最近 30 条任务记录和执行回执保存到应用私有 `noBackupFilesDir/agent`，不写进 APK。电脑的任务快照保存于 `.local/agent-tasks.sqlite3`，LangGraph 检查点保存于独立的 `.checkpoints` 数据库；恢复任务时需要保留这两个文件。运行时关闭 LangSmith tracing，不默认上传整份收听历史。
+手机把连接配置、最近 30 条任务记录和执行回执保存到应用私有 `noBackupFilesDir/agent`，不写进 APK。服务端的任务快照保存于 `.local/agent-tasks.sqlite3`，LangGraph 检查点保存于独立的 `.checkpoints` 数据库；恢复任务时需要保留这两个文件。运行时关闭 LangSmith tracing，不默认上传整份收听历史。
+
+### Linux 用户目录部署（内网 / VPN）
+
+已在 Ubuntu 22.04、现有 Conda `py310`（Python 3.10.19）上安装并启动。复制 `agent-server/` 到用户目录的项目目录，例如 `~/maoer-agent/agent-server`。复用现有 Conda Python，将依赖放入项目目录，不升级其他项目使用的环境包：
+
+```bash
+cd ~/maoer-agent
+umask 077
+mkdir -p .local/packages .local/tmp .local/pip-cache
+TMPDIR="$PWD/.local/tmp" PIP_CACHE_DIR="$PWD/.local/pip-cache" \
+  PYTHONDONTWRITEBYTECODE=1 "$HOME/miniconda3/envs/py310/bin/python" -m pip install \
+  --target "$PWD/.local/packages" -r agent-server/requirements.txt --only-binary=:all:
+```
+
+在此目录创建 `.local/agent.env`，使用上面的模型配置，另加实际服务器私网地址和端口，例如：
+
+```dotenv
+AGENT_HOST=10.0.0.10
+AGENT_PORT=8787
+```
+
+示例 IP 需要替换。启动命令不需要 sudo；代码、配置、依赖、数据库和日志均放在用户目录中：
+
+```bash
+bash agent-server/start.sh start
+bash agent-server/start.sh status
+# 需要停止时执行：bash agent-server/start.sh stop
+```
+
+默认复用 `$HOME/miniconda3/envs/py310/bin/python`；路径不同可通过环境变量 `AGENT_PYTHON` 指定已有解释器。脚本通过 `nohup` 后台运行，日志写入 `.local/agent-server.log`，进程锁避免重复启动；未安装系统服务，不提供服务器重启后的自动启动或崩溃拉起。完整依赖和凭据需要先准备好，启动输出后还应检查 `/healthz` 与实际 Agent 请求。
+
+迁移已有会话时先停止原服务，再一致地复制 `.local/agent-tasks.sqlite3`、`.local/agent-tasks.sqlite3.checkpoints` 和 `.local/agent-server.token`；模型配置仅复制当前使用的供应商。原实例保持停止，避免新旧服务各自处理同一任务。Android 会保留已保存的地址，需要在连接设置中手动切换；未完成任务时禁止切换服务器，但允许修正同一服务器的令牌并恢复。
+
+当前内网方案使用 HTTP 和访问令牌，HTTP 本身不加密，仅面向可信内网或受保护的 VPN。客户端拒绝公网 HTTP 地址；公网部署还需要 HTTPS 入口和独立的账号/授权设计。当前共享令牌适用于个人项目验证，不是多用户服务。
+
+**本轮远端验收：** 8项监听配置校验、11项客户端URL校验、令牌错误修正与原任务恢复通过；模拟器经SSH隧道调用真实远端模型，中文播放、20分钟定时和暂停共5个真实工具回执通过。连接设置已实测出现可编辑地址和令牌，当前Agent预览为该远端对话记录；截图时播放器暂停，定时是否仍生效应查询实时状态，进程重启不恢复定时。
+
+**端口验收边界：** 本轮服务器本机健康检查通过，但客户端直连业务端口超时；已测候选端口中只有 SSH 可达，需管理员确认内网/VPN与防火墙放行。通过 SSH 隧道验证远端业务不等于手机直连通过；使用电脑隧道时仍依赖电脑及 ADB 转发。
 
 ### 在电脑上聊天
 
@@ -306,9 +344,10 @@ adb -s emulator-5554 reverse tcp:8787 tcp:8787
 | `agent-server/agent_tools.py` | 固定工具清单、参数约束和任务提示 |
 | `agent-server/agent_tasks.py` | LangGraph 模型/设备节点、中断恢复、SQLite 快照、回执幂等及取消 |
 | `agent-server/agent_routes.py` | 任务创建、查询、SSE、工具领取/回传、取消及检查点重试 |
-| `agent-server/main.py` | 启动本机 Uvicorn 服务 |
+| `agent-server/main.py` | 按配置启动本机或私网 Uvicorn 服务 |
 | `agent-server/chat.py` | 供本地使用的文字聊天客户端 |
-| `agent-server/start.ps1` | 前台运行、后台启动及停止 |
+| `agent-server/start.ps1` | Windows 前台运行、后台启动及停止 |
+| `agent-server/start.sh` | Linux 用户目录后台启动、进程锁、状态查询及停止 |
 | `agent-server/requirements.txt` | 本轮验证使用的 Python 依赖锁定 |
 | `GET /healthz` | 无需认证的本机健康检查 |
 | `POST /v1/chat/completions` | 使用本地令牌的 Bearer 认证，接受 messages、stream 和可选 function 工具定义 |

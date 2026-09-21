@@ -36,6 +36,7 @@ import com.maoer.lite.data.podcast.PodcastSearchIndex
 import com.maoer.lite.ui.detail.DetailScreen
 import com.maoer.lite.ui.podcast.PodcastScreen
 import com.maoer.lite.ui.library.LibraryScreen
+import com.maoer.lite.ui.agent.AgentScreen
 import org.koin.compose.koinInject
 
 class HomeViewModel(repository: PodcastRepository) : ScreenModel {
@@ -119,7 +120,12 @@ object HomeScreen : Screen {
                         ),
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
                     )
-                    Spacer(Modifier.height(20.dp))
+                    TextButton(onClick = { navigator?.push(AgentScreen) }, modifier = Modifier.padding(start = 16.dp)) {
+                        Icon(Icons.Default.AutoAwesome, null, tint = accent, modifier = Modifier.size(17.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("AI 助手 · 用一句话，找到想听的", color = accent, fontSize = 12.sp)
+                        Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = accent, modifier = Modifier.padding(start = 8.dp).size(16.dp))
+                    }
                     LazyColumn(state = listState, modifier = Modifier.weight(1f),
                         contentPadding = PaddingValues(start = 24.dp, end = 24.dp, bottom = 24.dp),
                         verticalArrangement = Arrangement.spacedBy(18.dp)) {

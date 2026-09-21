@@ -119,6 +119,7 @@ Android 下载链路已接入系统 **DownloadManager**，实现任务状态展�
 | 网络与 RSS | Ktor 2.3.12、xmlutil 0.86.3 |
 | 图片加载 | Coil 3.0.4 |
 | Android 播放 | Media3 1.4.0、MediaLibraryService、MediaController |
+| SSH 连接 | mwiede/JSch 2.28.6、主机指纹校验、Android Keystore AES-GCM |
 | 本地保存 | DataStore 1.1.1、Okio 3.9.1、逐条 JSON 文件持久化 |
 | Android 下载 | 系统 DownloadManager |
 | Android Agent | Ktor SSE、协程/StateFlow、应用私有执行回执 |
@@ -282,7 +283,7 @@ adb -s emulator-5554 reverse tcp:8787 tcp:8787
 
 若已填写正确令牌却提示无法连接，先确认电脑服务正在运行，再执行 `adb -s emulator-5554 reverse --list`。列表中应有 `tcp:8787 tcp:8787`；若没有，重新执行上面的转发命令，然后在助手中点击“恢复连接”。页面按钮恢复的是原任务，无法自行重建电脑端 ADB 转发。恢复后若显示“模型当前繁忙”，则连接已到达服务端，但上游模型暂不可用。
 
-手机把连接配置、最近 30 条任务记录和执行回执保存到应用私有 `noBackupFilesDir/agent`，不写进 APK。服务端的任务快照保存于 `.local/agent-tasks.sqlite3`，LangGraph 检查点保存于独立的 `.checkpoints` 数据库；恢复任务时需要保留这两个文件。运行时关闭 LangSmith tracing，不默认上传整份收听历史。
+手机把连接配置、最近 30 条任务记录和执行回执保存到应用私有 `noBackupFilesDir/agent`，不写进 APK。Android 连接配置（含 SSH 密码与访问令牌）使用 Android Keystore 的 AES-GCM 密钥加密；旧版明文连接文件在读取成功后自动迁移，不能解密时不会静默回退到明文。服务端的任务快照保存于 `.local/agent-tasks.sqlite3`，LangGraph 检查点保存于独立的 `.checkpoints` 数据库；恢复任务时需要保留这两个文件。运行时关闭 LangSmith tracing，不默认上传整份收听历史。
 
 ### Linux 用户目录部署（内网 / VPN）
 
@@ -297,14 +298,14 @@ TMPDIR="$PWD/.local/tmp" PIP_CACHE_DIR="$PWD/.local/pip-cache" \
   --target "$PWD/.local/packages" -r agent-server/requirements.txt --only-binary=:all:
 ```
 
-在此目录创建 `.local/agent.env`，使用上面的模型配置，另加实际服务器私网地址和端口，例如：
+在此目录创建 `.local/agent.env`，使用上面的模型配置，另加监听地址和端口。App 内 SSH 模式推荐只监听服务器自身回环地址：
 
 ```dotenv
-AGENT_HOST=10.0.0.10
+AGENT_HOST=127.0.0.1
 AGENT_PORT=8787
 ```
 
-示例 IP 需要替换。启动命令不需要 sudo；代码、配置、依赖、数据库和日志均放在用户目录中：
+这里的 127.0.0.1 指远端服务器自身，由 SSH 服务转发访问；如果使用直接连接模式，则换成服务器实际私网 IP 并由管理员放行业务端口。启动命令不需要 sudo；代码、配置、依赖、数据库和日志均放在用户目录中：
 
 ```bash
 bash agent-server/start.sh start
@@ -318,9 +319,33 @@ bash agent-server/start.sh status
 
 当前内网方案使用 HTTP 和访问令牌，HTTP 本身不加密，仅面向可信内网或受保护的 VPN。客户端拒绝公网 HTTP 地址；公网部署还需要 HTTPS 入口和独立的账号/授权设计。当前共享令牌适用于个人项目验证，不是多用户服务。
 
-**本轮远端验收：** 8项监听配置校验、11项客户端URL校验、令牌错误修正与原任务恢复通过；模拟器经SSH隧道调用真实远端模型，中文播放、20分钟定时和暂停共5个真实工具回执通过。连接设置已实测出现可编辑地址和令牌，当前Agent预览为该远端对话记录；截图时播放器暂停，定时是否仍生效应查询实时状态，进程重启不恢复定时。
+**本轮远端验收：** 初始电脑隧道阶段验证了迁移和连接配置；之后关闭电脑 SSH 隧道并移除全部 ADB 8787 转发，Medium Phone 通过 App 内隧道独立完成中文播放、20分钟定时和暂停。错误主机指纹、错误密码、加密配置篡改均被拒绝；同任务断线恢复、任务结束关闭隧道、杀进程释放连接及重启后重新连接通过。服务器进程在手机退出前后保持运行，其他 SSH 连接未受此次测试影响。真机尚未实测，具体手机/VPN能否路由到服务器22端口仍取决于网络条件。当前Agent预览采自实际对话记录；历史定时文字不是实时状态，进程重启不恢复定时。
 
-**端口验收边界：** 本轮服务器本机健康检查通过，但客户端直连业务端口超时；已测候选端口中只有 SSH 可达，需管理员确认内网/VPN与防火墙放行。通过 SSH 隧道验证远端业务不等于手机直连通过；使用电脑隧道时仍依赖电脑及 ADB 转发。
+**网络边界：** 部署初期，业务端口直连和受控候选端口验证超时，已测端口中仅 SSH 22 可达。后续增加 App 内 SSH 隧道，服务器改为仅监听自身 127.0.0.1:8787，手机只需能访问服务器 SSH 端口，无需放行 8787。仍需内网或具有该服务器访问权限的 VPN；这不使私网 IP 自动变成公网地址。
+
+### 手机独立使用 SSH 隧道
+
+在助手右上角连接设置选择“SSH 隧道”，填写：
+
+| 配置项 | 含义 |
+| --- | --- |
+| SSH 服务器与端口 | 手机可达的服务器 IP/域名与 SSH 端口，通常为 22 |
+| SSH 用户名、密码 | 服务器允许的密码登录账号，仅加密保存在手机私有目录 |
+| 服务器指纹 | 读取后与服务器提供的 SHA256 指纹核对，明确确认后保存 |
+| 服务器内服务地址 | 默认 `http://127.0.0.1:8787`，此处回环地址属于远端服务器 |
+| 服务访问令牌 | 远端 `.local/agent-server.token`，不是 SSH 密码，也不是模型 Key |
+
+本机临时转发使用手机回环地址和动态空闲端口，不向手机所在网络开放监听。主机身份严格校验；指纹变化会拒绝连接，不自动接受新主机。Android 使用 ECDSA 或 RSA SHA-2 主机算法，可在服务器查询 ECDSA 指纹：
+
+```bash
+ssh-keygen -E sha256 -lf /etc/ssh/ssh_host_ecdsa_key.pub
+```
+
+SSH 由 Android 平台的 [mwiede/JSch](https://github.com/mwiede/jsch) 实现，锁定 2.28.6；凭据加密使用 [Android Keystore](https://developer.android.com/privacy-and-security/keystore)。当前提供密码认证，不提供 App 内终端、远程命令或文件管理。
+
+连接按任务创建和释放：同一任务的请求、SSE 与工具回执复用一个隧道，任务完成、失败或取消处理结束后主动关闭。切换页面不会打断正在执行的任务；杀掉进程后系统关闭连接，服务器 Agent 服务继续运行。网络中断后点击“恢复连接”会重建隧道，从同一任务恢复；不会自动重新发送整条聊天或重做已记录工具。没有额外常驻 SSH 前台服务，也不保证系统杀进程后继续在手机执行工具。
+
+首次配置完成后，真机在同一可达内网或 VPN 中即可独立使用，不需要电脑、USB 或 ADB；仅安装 APK 不会自动获得服务器凭据。服务器服务必须保持运行且允许该账号进行本地端口转发。服务端进程退出、机器关机或 VPN 不通时，SSH 本身不能代替这些条件。
 
 ### 在电脑上聊天
 

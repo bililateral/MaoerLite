@@ -62,7 +62,7 @@ class ChatRequest(StrictModel):
     messages: list[Message] = Field(min_length=1, max_length=40)
     stream: bool = False
     max_tokens: int = Field(default=1024, ge=1, le=2048)
-    tools: list[ToolDefinition] | None = Field(default=None, min_length=1, max_length=8)
+    tools: list[ToolDefinition] | None = Field(default=None, min_length=1, max_length=16)
     tool_choice: Literal['auto'] | None = None
 
     @model_validator(mode='after')

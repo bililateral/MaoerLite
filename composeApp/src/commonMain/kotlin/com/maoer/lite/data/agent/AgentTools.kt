@@ -1,6 +1,8 @@
 package com.maoer.lite.data.agent
 
 import com.maoer.lite.data.manager.PlayerManager
+import com.maoer.lite.data.manager.PlaybackOptions
+import com.maoer.lite.data.manager.QueueNavigation
 import com.maoer.lite.data.podcast.PodcastRepository
 import com.maoer.lite.data.podcast.PodcastSearchIndex
 import kotlinx.coroutines.*
@@ -23,6 +25,9 @@ class AgentTools(private val repository: PodcastRepository, private val player: 
         put("episode_id", player.playbackAudioId.value.orEmpty())
         put("title", player.currentAudio.value?.title.orEmpty())
         put("position_ms", player.positionMs.value); put("duration_ms", player.durationMs.value)
+        put("playback_speed", player.playbackSpeed.value)
+        put("queue_size", player.queue.value.size)
+        put("queue_index", player.queue.value.indexOfFirst { it.id == player.currentAudio.value?.id })
         put("sleep_remaining_ms", player.sleepTimer.value.remainingMs)
         put("sleep_end_of_episode", player.sleepTimer.value.endOfEpisode)
         put("playback_error", player.playbackError.value.orEmpty())
@@ -114,6 +119,24 @@ class AgentTools(private val repository: PodcastRepository, private val player: 
                 val id = player.currentAudio.value?.id ?: return error("当前没有选中的分集，请先选择节目。")
                 player.resume(); awaitPlaying(id)
             }
+            "previous_episode", "next_episode" -> {
+                require(args.isEmpty())
+                val queue = player.queue.value
+                val index = queue.indexOfFirst { it.id == player.currentAudio.value?.id }
+                if (index < 0) return error("当前没有可切换的播放队列，请先选择节目播放。")
+                val next = call.name == "next_episode"
+                val target = queue[if (next) QueueNavigation.nextIndex(index, queue.size) else QueueNavigation.previousIndex(index, queue.size)]
+                if (next) player.next() else player.previous()
+                awaitPlaying(target.id)
+            }
+            "set_playback_speed" -> {
+                require(args.keys == setOf("speed"))
+                val speed = args.getValue("speed").jsonPrimitive.float
+                require(speed in PlaybackOptions.speeds)
+                player.setPlaybackSpeed(speed)
+                val observed = withTimeoutOrNull(3000) { player.playbackSpeed.first { it == speed } } != null
+                state(if (observed) "ok" else "accepted", if (observed) "已设置 ${speed.toString().removeSuffix(".0")} 倍速。" else "倍速请求已发送，等待播放器确认。")
+            }
             "set_sleep_timer" -> {
                 require(args.keys == setOf("minutes"))
                 val minutes = args.getValue("minutes").jsonPrimitive.int
@@ -134,10 +157,21 @@ class AgentTools(private val repository: PodcastRepository, private val player: 
         }
     }
     private suspend fun awaitPlaying(id: String): JsonObject {
-        val playing = withTimeoutOrNull(12000) {
-            combine(player.playbackAudioId, player.isPlaying) { current, active -> current == id && active }.first { it }
+        val stable = withTimeoutOrNull(12000) {
+            var observations = 0
+            while (observations < 3) {
+                delay(100)
+                observations = if (player.playbackAudioId.value == id && player.isPlaying.value && !player.buffering.value) observations + 1 else 0
+            }
+            true
         } == true
-        return state(when { playing -> "ok"; player.playbackError.value != null -> "error"; else -> "accepted" },
-            if (playing) "已观察到目标分集实际播放。" else "尚未观察到目标分集开始播放，请根据实际状态回答。")
+        val snapshot = state()
+        val playing = stable && snapshot.getValue("episode_id").jsonPrimitive.content == id &&
+            snapshot.getValue("playing").jsonPrimitive.boolean && !snapshot.getValue("buffering").jsonPrimitive.boolean
+        return buildJsonObject {
+            snapshot.forEach { (key, value) -> put(key, value) }
+            put("status", when { playing -> "ok"; snapshot.getValue("playback_error").jsonPrimitive.content.isNotEmpty() -> "error"; else -> "accepted" })
+            put("note", if (playing) "已确认目标分集实际播放。" else "尚未确认目标分集稳定播放，请根据实际状态回答。")
+        }
     }
 }

@@ -11,7 +11,7 @@ def main():
     try:
         settings = load_settings()
     except (OSError, ValueError):
-        print('Configuration failed: check .local/agent.env, provider, base URL, model, key and port.', file=sys.stderr)
+        print('Configuration failed: check .local/agent.env, base URL, model, key and port.', file=sys.stderr)
         return 1
     logging.basicConfig(level=logging.INFO, format='%(levelname)s %(name)s %(message)s')
     logging.getLogger('httpx').setLevel(logging.WARNING)

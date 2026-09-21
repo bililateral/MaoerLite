@@ -15,7 +15,7 @@ class Settings:
     api_key: str = field(repr=False)
     access_token: str = field(repr=False)
     port: int = 8787
-    provider: str = 'openai_compatible'
+    provider: str = field(default='openai_compatible', init=False)
     base_url: str = DEFAULT_BASE_URL
     model: str = DEFAULT_MODEL
     host: str = '127.0.0.1'
@@ -35,15 +35,13 @@ def load_settings(path: Path = ROOT / '.local/agent.env') -> Settings:
             raise ValueError('Invalid local configuration line')
         name, value = line.split('=', 1)
         values[name.strip()] = value.strip().removeprefix('"').removesuffix('"').removeprefix("'").removesuffix("'")
-    provider = values.get('AGENT_PROVIDER', 'openai_compatible')
-    if provider not in ('openai_compatible', 'zhipu'):
-        raise ValueError('Invalid AGENT_PROVIDER')
-    # Provider selection is explicit: never send the old provider key to a relay.
-    key = values.get('AGENT_API_KEY' if provider == 'openai_compatible' else 'ZHIPU_API_KEY', '')
+    if values.get('AGENT_PROVIDER', 'openai_compatible') != 'openai_compatible':
+        raise ValueError('Only OpenAI-compatible model endpoints are supported')
+    key = values.get('AGENT_API_KEY', '')
     if not key or any(c.isspace() for c in key) or not key.isascii():
-        raise ValueError('Selected provider API key is missing or invalid')
-    base_url = values.get('AGENT_BASE_URL', DEFAULT_BASE_URL).rstrip('/') if provider == 'openai_compatible' else 'https://open.bigmodel.cn/api/paas/v4'
-    model = values.get('AGENT_MODEL', DEFAULT_MODEL) if provider == 'openai_compatible' else values.get('ZHIPU_MODEL', 'glm-4.7-flash')
+        raise ValueError('Model API key is missing or invalid')
+    base_url = values.get('AGENT_BASE_URL', DEFAULT_BASE_URL).rstrip('/')
+    model = values.get('AGENT_MODEL', DEFAULT_MODEL)
     parsed = urlsplit(base_url)
     if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ValueError('Invalid model service base URL')
@@ -67,4 +65,4 @@ def load_settings(path: Path = ROOT / '.local/agent.env') -> Settings:
     token = token_path.read_text(encoding='utf-8').strip()
     if len(token) < 32 or not token.isascii() or any(c.isspace() for c in token):
         raise ValueError('Invalid local access token file')
-    return Settings(key, token, port, provider, base_url, model, host)
+    return Settings(api_key=key, access_token=token, port=port, base_url=base_url, model=model, host=host)

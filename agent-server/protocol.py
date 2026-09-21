@@ -98,10 +98,7 @@ class ChatRequest(StrictModel):
     def upstream_body(self, settings: Settings):
         if self.model is not None and self.model != settings.model:
             raise ValueError('Only the configured model is enabled')
-        body = {**self.model_dump(exclude_none=True), 'model': settings.model}
-        if settings.provider == 'zhipu':
-            body['thinking'] = {'type': 'disabled'}
-        return body
+        return {**self.model_dump(exclude_none=True), 'model': settings.model}
 
 
 def public_response(data: dict) -> dict:
@@ -117,8 +114,8 @@ def public_response(data: dict) -> dict:
                 if key in choice:
                     clean[key] = {k: v for k, v in choice[key].items() if k in ('role', 'content', 'tool_calls')}
                     if key == 'message' and 'tool_calls' in clean[key]:
-                        # GLM also returns a stream assembly index in complete
-                        # messages. The request protocol must not replay it.
+                        # Stream assembly fields do not belong in complete
+                        # messages replayed to the model.
                         clean[key]['tool_calls'] = [
                             {k: v for k, v in call.items() if k in ('id', 'type', 'function')}
                             for call in clean[key]['tool_calls']

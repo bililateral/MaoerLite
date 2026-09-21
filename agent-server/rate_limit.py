@@ -36,8 +36,7 @@ def retry_after_seconds(value, now=None):
 
 
 class RateLimitPolicy:
-    def __init__(self, clock=time.monotonic, jitter=None, provider='zhipu'):
-        self.provider = provider
+    def __init__(self, clock=time.monotonic, jitter=None):
         self.clock = clock
         self.jitter = jitter or (lambda: secrets.randbelow(6))
         self.failures = 0
@@ -50,23 +49,13 @@ class RateLimitPolicy:
         upstream = str(raw) if type(raw) in (str, int) else ''
         upstream = upstream if re.fullmatch(r'[A-Za-z0-9_]{1,64}', upstream) else None
         mapping = {
-            '1302': ('upstream_account_rate_limit', True),
-            '1305': ('upstream_overloaded', True),
-            '1113': ('upstream_account_arrears', False),
-            '1308': ('upstream_quota_exhausted', False),
-            '1310': ('upstream_quota_exhausted', False),
-            **{str(n): ('upstream_quota_exhausted', False) for n in range(1316, 1322)},
-            **{str(n): ('upstream_account_restricted', False) for n in (1309, 1311, 1313, 1314, 1315)},
+            'rate_limit_exceeded': ('upstream_account_rate_limit', True),
+            'overloaded_error': ('upstream_overloaded', True),
+            'server_overloaded': ('upstream_overloaded', True),
+            'insufficient_quota': ('upstream_quota_exhausted', False),
+            'billing_hard_limit_reached': ('upstream_quota_exhausted', False),
+            'invalid_api_key': ('upstream_account_restricted', False),
         }
-        if self.provider == 'openai_compatible':
-            mapping = {
-                'rate_limit_exceeded': ('upstream_account_rate_limit', True),
-                'overloaded_error': ('upstream_overloaded', True),
-                'server_overloaded': ('upstream_overloaded', True),
-                'insufficient_quota': ('upstream_quota_exhausted', False),
-                'billing_hard_limit_reached': ('upstream_quota_exhausted', False),
-                'invalid_api_key': ('upstream_account_restricted', False),
-            }
         code, retryable = mapping.get(upstream, ('upstream_rate_limit_unknown', False))
         self.failures = min(self.failures + 1, 4)
         local = (30, 60, 120, 300)[self.failures - 1] + self.jitter()

@@ -33,10 +33,10 @@ def error(status, code, request_id, retry_after=None, **details):
 
 class Gate:
     """One process, one event loop; no awaits inside state transitions."""
-    def __init__(self, provider='openai_compatible'):
+    def __init__(self):
         self.active = False
         self.times = deque()
-        self.limiter = RateLimitPolicy(provider=provider)
+        self.limiter = RateLimitPolicy()
 
     def enter(self):
         now = time.monotonic()
@@ -151,7 +151,7 @@ def create_app(settings: Settings, transport=None, agent_db=None):
                 yield
 
     app = FastAPI(title='Maoer Local Agent', docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
-    gate = Gate(settings.provider)
+    gate = Gate()
     app.state.gate = gate
     from agent_routes import register
     register(app, settings)

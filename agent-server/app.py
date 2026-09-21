@@ -13,7 +13,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
 
-from config import Settings
+from config import ROOT, Settings
 from protocol import ChatRequest, public_response
 from rate_limit import RateLimitPolicy, Throttle
 
@@ -137,7 +137,7 @@ async def sse_data(response, deadline):
             raise ValueError('SSE line too large')
 
 
-def create_app(settings: Settings, transport=None):
+def create_app(settings: Settings, transport=None, agent_db=None):
     @asynccontextmanager
     async def lifespan(app):
         async with httpx.AsyncClient(
@@ -145,11 +145,16 @@ def create_app(settings: Settings, transport=None):
             trust_env=False, transport=transport,
         ) as client:
             app.state.client = client
-            yield
+            from agent_tasks import task_service
+            async with task_service(app, settings, agent_db or ROOT / '.local/agent-tasks.sqlite3') as tasks:
+                app.state.agent = tasks
+                yield
 
     app = FastAPI(title='Maoer Local Agent', docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     gate = Gate(settings.provider)
     app.state.gate = gate
+    from agent_routes import register
+    register(app, settings)
 
     @app.get('/healthz')
     async def health():

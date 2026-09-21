@@ -36,7 +36,18 @@ case "${1:-start}" in
     stop)
         if pid="$(owned_pid)"; then
             kill -TERM "$pid"
-            printf 'Stop requested; PID=%s\n' "$pid"
+            for attempt in {1..50}; do
+                if [[ "$(owned_pid || true)" != "$pid" ]]; then
+                    if [[ -f "$RUNTIME/agent-server.pid" && "$(cat "$RUNTIME/agent-server.pid")" == "$pid" ]]; then
+                        rm -- "$RUNTIME/agent-server.pid"
+                    fi
+                    printf 'Agent server stopped; PID=%s\n' "$pid"
+                    exit 0
+                fi
+                sleep 0.2
+            done
+            printf 'Server is still shutting down; check status before starting again.\n' >&2
+            exit 1
         else printf 'No verified Agent process is running.\n'; fi
         ;;
     status)

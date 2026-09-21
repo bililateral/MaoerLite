@@ -154,7 +154,8 @@ composeApp/src/
 │   │   ├── Platform.android.kt               # Android 平台信息实现
 │   │   ├── data/
 │   │   │   ├── agent/
-│   │   │   │   └── AgentStorage.android.kt  # noBackupFilesDir 存储路径与发布日期解析
+│   │   │   │   ├── AgentStorage.android.kt  # noBackupFilesDir 存储路径与发布日期解析
+│   │   │   │   └── AgentTransport.android.kt # SSH 隧道、主机指纹与 Keystore 凭据加密
 │   │   │   ├── manager/
 │   │   │   │   └── AndroidMediaPlayerController.kt # 连接媒体服务、控制播放、同步状态
 │   │   │   ├── download/
@@ -171,6 +172,19 @@ composeApp/src/
 gradle/libs.versions.toml   # 依赖版本
 iosApp/                    # iOS 宿主工程
 agent-server/              # Python 模型网关、LangGraph 任务流程与检查点
+├── main.py                # 加载配置，启动 Uvicorn HTTP 服务
+├── config.py              # 模型 Base URL / Key、监听地址及独立客户端访问令牌
+├── app.py                 # FastAPI 生命周期、HTTPX 连接、原始聊天网关与共享准入限制
+├── protocol.py            # 聊天协议校验、工具消息配对、上游请求及公开响应字段
+├── rate_limit.py          # 通用 429 分类、Retry-After 解析与共享冷却策略
+├── agent_routes.py        # Agent 任务接口、SSE 快照、工具领取与结果回传
+├── agent_tasks.py         # LangGraph 流程、SQLite 持久化、中断恢复、幂等与取消
+├── agent_model.py         # 模型流式适配、文字增量发布、工具参数片段组装
+├── agent_tools.py         # 十项业务工具定义、参数约束与系统提示
+├── chat.py                # 本地终端文字聊天客户端，不执行 Android 业务工具
+├── start.ps1              # Windows 前台运行、后台启动与停止
+├── start.sh               # Linux 用户目录启动、进程锁、状态查询与停止
+└── requirements.txt       # FastAPI、HTTPX、LangGraph 等 Python 依赖版本锁定
 ```
 
 ### Android 层如何协作
@@ -186,6 +200,51 @@ agent-server/              # Python 模型网关、LangGraph 任务流程与检�
 | `PlatformModule.android` | 通过 Koin 将共享的 `MediaPlayerController`、`Downloads` 接口绑定到 Android 实现。 |
 
 播放命令从共享页面经过 `PlayerManager` 和 `AndroidMediaPlayerController` 到达后台媒体服务，播放状态再回传到界面。下载传输由系统 DownloadManager 执行，下载模块提供状态和文件供资料库、播放器使用。
+
+### Python 服务端如何协作
+
+服务端分为模型网关和 Agent 任务管理两部分，共用 HTTPX 连接、并发限制与冷却状态。代码目前直接放在 `agent-server/` 下，按文件划分职责；Android 通过任务接口使用 Agent，`chat.py` 则通过原始聊天网关提供终端文字交流。
+
+| 模块 | 具体职责与边界 |
+| --- | --- |
+| `main.py` / `config.py` | 读取 `.local/agent.env` 中的 OpenAI-compatible Base URL、模型和 API Key，创建或读取独立的客户端访问令牌，再启动 Uvicorn。上游 Key 留在服务端，客户端不能覆盖模型配置。 |
+| `app.py` / `protocol.py` | 创建 FastAPI 应用，在生命周期内打开、关闭共享 HTTPX 客户端和任务服务；校验访问令牌、请求大小、消息角色及工具结果配对，提供 `/v1/chat/completions` 网关，并过滤对外响应字段。 |
+| `agent_routes.py` | 提供任务创建、查询、取消、重试及会话删除接口；通过 SSE 返回带版本号的完整任务快照，接收 Android 的工具领取和执行结果。SSE 包含逐步增长的回复文字，但不是原样转发上游 Token 事件。 |
+| `agent_tasks.py` | 编排 LangGraph 的 `model`、`device` 两个节点，保存任务状态与检查点；管理模型调用轮次、失败重试、等待设备、中断恢复及重复回执。服务启动时核对持久化状态，避免盲目重做已执行步骤。 |
+| `agent_model.py` | 调用模型并解析 SSE，将文字增量发布给任务状态；组装完整的工具名称、调用 ID 和 JSON 参数，再交给任务层校验，避免执行尚未接收完整的工具请求。 |
+| `agent_tools.py` | 定义搜索、分集查询、播放状态、播放、暂停、继续、上一集、下一集、倍速和睡眠定时十项工具，约束参数及模型行为。实际 RSS 查询和播放器操作由 Android 执行。 |
+| `rate_limit.py` | 解析通用 429 错误和 `Retry-After`，计算共享冷却时间；模型节点据此安排有限重试。额度错误及未知 429 不盲目重试，文件中已无智谱专用错误码逻辑。 |
+| `start.ps1` / `start.sh` | 管理当前用户目录下的启动、日志和进程；Linux 脚本复用已有 Python/Conda 环境并使用进程锁。当前脚本不提供开机自启或崩溃自动拉起。 |
+
+一次“播放岩中花述最新一期”的请求，会按下面的路径查询真实节目和分集，再控制手机播放器：
+
+```mermaid
+flowchart TD
+    A[Android 点播助手] -->|App SSH 隧道 / HTTP| B[agent_routes：创建或恢复任务]
+    B --> C[agent_tasks：LangGraph model 节点]
+    C --> D[agent_model：通过共享 HTTPX 调用模型]
+    D --> E{完整模型输出}
+    E -->|最终文字| F[保存任务结果]
+    E -->|工具调用| G[校验工具白名单、参数和来源 ID]
+    G --> H[device 节点 interrupt，保存检查点]
+    H -->|SSE 快照中的待执行工具| A
+    A -->|领取工具并调用真实业务| I[Android 目录 / RSS / 播放器]
+    I -->|真实执行回执| J[agent_routes：提交结果]
+    J --> K[校验并保存回执，Command resume]
+    K --> C
+    F -->|SSE 任务快照| A
+```
+
+LangGraph 每轮最多派发一个工具；搜索节目、查询分集和开始播放可以跨多轮完成。`device` 节点等待手机回执时保存检查点，收到结果后把它加入工具消息并恢复 `model` 节点。模型回复中的“已播放”必须有手机执行结果支撑，服务端本身不持有播放器。
+
+持久化使用两个独立的 SQLite 文件，默认位于仓库根目录的 `.local/`：
+
+| 运行文件 | 保存内容 |
+| --- | --- |
+| `agent-tasks.sqlite3` | 任务快照、对话上下文、工具领取与回执记录，以及已删除会话的标记；供接口查询、重复提交检查和恢复使用。 |
+| `agent-tasks.sqlite3.checkpoints` | LangGraph 状态与中断检查点；供等待手机结果后恢复流程，以及从失败步骤重试使用。 |
+
+两库分开，是为了避免同步任务快照写入与异步检查点事务争用同一 SQLite 数据库，阻塞事件循环。任务 ID 用于识别重复创建，工具调用 ID 与回执记录用于识别重复结果；Android 同时持久化执行记录，避免恢复连接后重复切集或设置定时。取消任务会停止后续操作，已经发生的播放仍以手机实际状态为准。
 
 ## 构建与运行
 
@@ -363,23 +422,12 @@ SSH 由 Android 平台的 [mwiede/JSch](https://github.com/mwiede/jsch) 实现�
 
 输入中文即可流式交流；`/clear` 清空当前对话，`/exit` 退出。该终端客户端没有连接真实播客业务，不会播放音频或修改收听记录。它只读取本地访问令牌，不读取上游 Key。
 
-### 接口和代码结构
+### 服务接口
 
-| 文件/接口 | 职责 |
+代码职责与任务流转见前文“Python 服务端如何协作”。对客户端开放的接口如下：
+
+| 接口 | 职责 |
 | --- | --- |
-| `agent-server/config.py` | 加载供应商、Base URL、模型与对应 Key，生成独立访问令牌 |
-| `agent-server/protocol.py` | 校验文字消息、函数定义、工具调用和结果配对，过滤推理字段 |
-| `agent-server/app.py` | FastAPI 网关、HTTPX 连接、SSE 转发、取消、超时和限流 |
-| `agent-server/rate_limit.py` | 上游 429 分类、官方等待时间解析、共享冷却与递增退避 |
-| `agent-server/agent_model.py` | Agent 模型流式适配、完整工具参数组装、复用网关并发与冷却策略 |
-| `agent-server/agent_tools.py` | 固定工具清单、参数约束和任务提示 |
-| `agent-server/agent_tasks.py` | LangGraph 模型/设备节点、中断恢复、SQLite 快照、回执幂等及取消 |
-| `agent-server/agent_routes.py` | 任务创建、查询、SSE、工具领取/回传、取消及检查点重试 |
-| `agent-server/main.py` | 按配置启动本机或私网 Uvicorn 服务 |
-| `agent-server/chat.py` | 供本地使用的文字聊天客户端 |
-| `agent-server/start.ps1` | Windows 前台运行、后台启动及停止 |
-| `agent-server/start.sh` | Linux 用户目录后台启动、进程锁、状态查询及停止 |
-| `agent-server/requirements.txt` | 本轮验证使用的 Python 依赖锁定 |
 | `GET /healthz` | 无需认证的本机健康检查 |
 | `POST /v1/chat/completions` | 使用本地令牌的 Bearer 认证，接受 messages、stream 和可选 function 工具定义 |
 | `POST /v1/agent/runs` | 使用客户端任务 ID 创建任务；相同 ID 和内容重复提交不会新建任务 |

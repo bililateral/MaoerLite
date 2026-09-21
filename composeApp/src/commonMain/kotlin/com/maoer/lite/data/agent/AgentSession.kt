@@ -21,11 +21,16 @@ class AgentSession(private val storage: AgentStorage, private val api: AgentApi,
     fun configure(value: AgentConnection) = scope.launch {
         try {
             require(!mutable.value.working)
-            require(value.url == "http://127.0.0.1:8787")
+            val url = agentServiceUrl(value.url)
+            val sameService = url == agentServiceUrl(storage.connection().url)
+            if (!sameService) {
+                require(mutable.value.history.cancelPending == null && !mutable.value.history.deletePending)
+                require(mutable.value.history.turns.lastOrNull()?.let { it.run?.terminal == true } != false)
+            }
             require(value.token.length >= 32 && value.token.all { it.code in 33..126 })
-            storage.saveConnection(value)
+            storage.saveConnection(value.copy(url = url))
             mutable.value = mutable.value.copy(connected = true, notice = "连接配置已保存")
-        } catch (_: Exception) { mutable.value = mutable.value.copy(notice = "请填写有效的本地服务令牌，并先结束当前任务。") }
+        } catch (_: Exception) { mutable.value = mutable.value.copy(notice = "请填写有效的服务地址和访问令牌，并先结束或恢复当前任务。") }
     }
     private suspend fun save(history: AgentHistory) {
         storage.saveHistory(history)
@@ -46,7 +51,7 @@ class AgentSession(private val storage: AgentStorage, private val api: AgentApi,
             try { block() }
             catch (e: CancellationException) { throw e }
             catch (e: AgentApiException) { failureNotice(agentError(e.code)) }
-            catch (_: IOException) { failureNotice("无法连接电脑服务，请确认服务已启动，并重新建立 ADB 8787 端口转发后恢复连接。") }
+            catch (_: IOException) { failureNotice("无法连接助手服务，请检查服务地址、内网或 VPN；使用本机地址时需建立 ADB 8787 端口转发。") }
             catch (_: Exception) { failureNotice(if (mutable.value.history.deletePending) "请检查连接或本地存储后重试。" else "连接已中断，恢复连接会继续当前任务，不会重新执行已记录操作。") }
             finally { mutable.value = mutable.value.copy(working = false) }
         }

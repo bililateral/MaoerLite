@@ -38,12 +38,20 @@ object AgentScreen : Screen {
         var input by rememberSaveable { mutableStateOf("") }
         var settings by remember { mutableStateOf(false) }
         var token by remember { mutableStateOf("") }
+        var serviceUrl by remember { mutableStateOf("") }
         val list = rememberLazyListState()
         val accent = Color(0xFFB83D36)
         val last = state.history.turns.lastOrNull()?.run
         val pending = state.history.deletePending || state.history.turns.lastOrNull()?.let { it.run?.terminal != true } == true || state.history.cancelPending != null
         LaunchedEffect(state.ready) {
             if (state.ready && state.connected && pending && !state.working) session.reconnect()
+        }
+        LaunchedEffect(settings) {
+            if (settings) {
+                val connection = session.connection()
+                serviceUrl = connection.url
+                token = connection.token
+            }
         }
         LaunchedEffect(state.history.turns.size) {
             if (state.history.turns.isNotEmpty()) list.animateScrollToItem(state.history.turns.lastIndex)
@@ -130,14 +138,14 @@ object AgentScreen : Screen {
                 }
             }
         }
-        if (settings) AlertDialog(onDismissRequest = { settings = false; token = "" }, title = { Text("本地服务连接") }, text = {
+        if (settings) AlertDialog(onDismissRequest = { settings = false; token = "" }, title = { Text("助手服务连接") }, text = {
             Column {
-                Text("连接电脑上的模型服务。填写本地访问令牌，不是模型 API Key。", fontSize = 13.sp)
-                Text("地址：127.0.0.1:8787", Modifier.padding(vertical = 12.dp), fontSize = 13.sp)
-                OutlinedTextField(value = token, onValueChange = { token = it.trim() }, label = { Text("本地访问令牌") }, singleLine = true,
+                Text("填写助手服务地址和访问令牌，不是模型 API Key。内网地址需要连接同一网络或 VPN。", fontSize = 13.sp)
+                OutlinedTextField(value = serviceUrl, onValueChange = { serviceUrl = it }, label = { Text("服务地址") }, singleLine = true)
+                OutlinedTextField(value = token, onValueChange = { token = it.trim() }, label = { Text("访问令牌") }, singleLine = true,
                     visualTransformation = PasswordVisualTransformation())
             }
-        }, confirmButton = { TextButton(onClick = { session.configure(AgentConnection(token = token)); settings = false; token = "" }) { Text("保存") } },
+        }, confirmButton = { TextButton(onClick = { session.configure(AgentConnection(url = serviceUrl, token = token)); settings = false; token = "" }) { Text("保存") } },
             dismissButton = { TextButton(onClick = { settings = false; token = "" }) { Text("取消") } })
     }
 }

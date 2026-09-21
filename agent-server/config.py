@@ -1,6 +1,7 @@
 """Local configuration. Secrets are never included in representations or errors."""
 from dataclasses import dataclass, field
 from pathlib import Path
+from ipaddress import ip_address
 import secrets
 from urllib.parse import urlsplit
 
@@ -17,6 +18,7 @@ class Settings:
     provider: str = 'openai_compatible'
     base_url: str = DEFAULT_BASE_URL
     model: str = DEFAULT_MODEL
+    host: str = '127.0.0.1'
 
     @property
     def endpoint(self):
@@ -50,6 +52,12 @@ def load_settings(path: Path = ROOT / '.local/agent.env') -> Settings:
     port = int(values.get('AGENT_PORT', '8787'))
     if not 1024 <= port <= 65535:
         raise ValueError('Invalid AGENT_PORT')
+    host = values.get('AGENT_HOST', '127.0.0.1')
+    address = ip_address(host)
+    if address.version != 4 or not (address.is_loopback or any(
+        host.startswith(prefix) for prefix in ('10.', '192.168.')
+    ) or (host.startswith('172.') and 16 <= int(host.split('.')[1]) <= 31)):
+        raise ValueError('AGENT_HOST must be a loopback or private IPv4 address')
     token_path = path.resolve().with_name('agent-server.token')
     try:
         with token_path.open('x', encoding='utf-8') as file:
@@ -59,4 +67,4 @@ def load_settings(path: Path = ROOT / '.local/agent.env') -> Settings:
     token = token_path.read_text(encoding='utf-8').strip()
     if len(token) < 32 or not token.isascii() or any(c.isspace() for c in token):
         raise ValueError('Invalid local access token file')
-    return Settings(key, token, port, provider, base_url, model)
+    return Settings(key, token, port, provider, base_url, model, host)

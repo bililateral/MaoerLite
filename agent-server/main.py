@@ -16,7 +16,7 @@ def main():
     logging.basicConfig(level=logging.INFO, format='%(levelname)s %(name)s %(message)s')
     logging.getLogger('httpx').setLevel(logging.WARNING)
     logging.getLogger('httpcore').setLevel(logging.WARNING)
-    uvicorn.run(create_app(settings), host='127.0.0.1', port=settings.port,
+    uvicorn.run(create_app(settings), host=settings.host, port=settings.port,
                 access_log=False, log_level='info', timeout_graceful_shutdown=5)
     return 0
 

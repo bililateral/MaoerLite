@@ -1,4 +1,4 @@
-# Runtime lock: Python 3.10 / Windows, including LangGraph task orchestration.
+# Runtime lock: Python 3.10 / Windows and Linux, including LangGraph task orchestration.
 aiosqlite==0.22.1
 annotated-doc==0.0.5
 annotated-types==0.8.0

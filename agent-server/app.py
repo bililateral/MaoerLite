@@ -1,4 +1,4 @@
-"""Loopback-only model gateway. No keys, prompts or upstream error bodies in logs."""
+"""Private model gateway. No keys, prompts or upstream error bodies in logs."""
 import asyncio
 from collections import deque
 from contextlib import asynccontextmanager
@@ -158,7 +158,8 @@ def create_app(settings: Settings, transport=None, agent_db=None):
 
     @app.get('/healthz')
     async def health():
-        return {'status': 'ok', 'model': settings.model, 'provider': settings.provider, 'scope': 'local', 'runtime': 'python-fastapi'}
+        return {'status': 'ok', 'model': settings.model, 'provider': settings.provider,
+                'scope': 'local' if settings.host.startswith('127.') else 'private-network', 'runtime': 'python-fastapi'}
 
     @app.post('/v1/chat/completions')
     async def chat(request: Request):

@@ -18,6 +18,7 @@ from langchain_core.runnables.config import set_config_context
 
 from agent_model import ModelFailure, generate
 from agent_tools import DEFINITIONS, SYSTEM, validated_calls
+from agent_memory import context, model_messages, references, remember, replay_references
 
 TERMINAL = {'completed', 'cancelled', 'failed'}
 
@@ -27,6 +28,7 @@ class State(TypedDict):
     messages: list[dict]
     rounds: int
     calls: list[dict]
+    memory: dict
 
 
 class TaskConflict(Exception):
@@ -77,7 +79,7 @@ class Store:
 
     @staticmethod
     def public(run):
-        return {k: v for k, v in run.items() if k not in ('history', 'receipts', 'input')}
+        return {k: v for k, v in run.items() if k not in ('history', 'receipts', 'input', 'memory')}
 
 
 class AgentTasks:
@@ -105,7 +107,8 @@ class AgentTasks:
         for attempt in range(3):
             self.store.update(run_id, text='', status='generating', retry_after=0, error='')
             try:
-                message = await self.model(self.app, self.settings, state['messages'], DEFINITIONS, publish)
+                message = await self.model(self.app, self.settings,
+                                           model_messages(state['messages'], state.get('memory', {})), DEFINITIONS, publish)
                 break
             except ModelFailure as exc:
                 if (not exc.retryable or attempt == 2 or waited + exc.delay > 120
@@ -118,7 +121,7 @@ class AgentTasks:
         calls = validated_calls(message)
         if calls:
             # No tool is dispatched until complete model output and validation.
-            known = []
+            known = list(references(state.get('memory', {})))
             for previous in state['messages']:
                 if previous['role'] == 'tool':
                     result = json.loads(previous['content'])
@@ -126,7 +129,8 @@ class AgentTasks:
             for call in calls:
                 args = call['arguments']
                 if call['name'] == 'list_episodes' and not any(
-                        item.get('id') == args['podcast_id'] and item.get('kind') == 'podcast' for item in known):
+                        (item.get('id') == args['podcast_id'] and item.get('kind') == 'podcast') or
+                        (item.get('podcast_id') == args['podcast_id'] and item.get('kind') == 'episode') for item in known):
                     raise ModelFailure('unverified_podcast_id')
                 if call['name'] == 'play_episode' and not any(
                         item.get('id') == args['episode_id'] and item.get('podcast_id') == args['podcast_id']
@@ -146,7 +150,11 @@ class AgentTasks:
             results = context.run(interrupt, {'calls': state['calls']})
         messages = state['messages'] + [{'role': 'tool', 'tool_call_id': r['call_id'],
                                        'content': json.dumps(r['result'], ensure_ascii=False)} for r in results]
-        return {'messages': messages, 'calls': []}
+        memory = state.get('memory')
+        if memory is None:
+            memory = replay_references({'turn': 1, 'groups': []}, state['run_id'], state['messages'])
+        memory = remember(memory, state['run_id'], state['calls'], results)
+        return {'messages': messages, 'calls': [], 'memory': memory}
 
     def launch(self, run_id, value):
         if run_id in self.jobs: raise TaskConflict('task_busy')
@@ -161,7 +169,7 @@ class AgentTasks:
                 self.store.update(run_id, status='awaiting_tools', calls=result['calls'], text='', retry_after=0)
             else:
                 self.store.update(run_id, status='completed', calls=[], text=result['messages'][-1].get('content') or '',
-                                  history=result['messages'], error='', retry_after=0)
+                                  history=result['messages'], memory=result.get('memory', {}), error='', retry_after=0)
         except asyncio.CancelledError:
             # Explicit cancellation and service shutdown choose their status outside this task.
             raise
@@ -185,15 +193,12 @@ class AgentTasks:
         previous = self.store.conversation(request.conversation_id)
         if any(r['status'] not in TERMINAL for r in previous): raise TaskConflict('conversation_busy')
         completed = [r for r in previous if r['status'] == 'completed']
-        history = completed[-1]['history'][1:] if completed else []
-        # Keep complete user/tool groups, never truncate inside a tool round.
-        starts = [i for i, message in enumerate(history) if message['role'] == 'user']
-        if len(starts) > 1: history = history[starts[-1]:]
+        history, memory = context(completed)
         messages = [{'role': 'system', 'content': SYSTEM}] + history + [{'role': 'user', 'content': request.message}]
-        initial = {'run_id': request.id, 'messages': messages, 'rounds': 0, 'calls': []}
+        initial = {'run_id': request.id, 'messages': messages, 'rounds': 0, 'calls': [], 'memory': memory}
         run = self.store.put({'id': request.id, 'conversation_id': request.conversation_id, 'status': 'generating',
             'text': '', 'calls': [], 'results': [], 'claimed': [], 'receipts': {}, 'error': '', 'retry_after': 0,
-            'retry_at': 0, 'version': 0, 'input': value, 'history': [], 'created_at': int(time.time())})
+            'retry_at': 0, 'version': 0, 'input': value, 'history': [], 'memory': memory, 'created_at': int(time.time())})
         self.launch(request.id, initial)
         return run
 
@@ -283,7 +288,7 @@ class AgentTasks:
                 # Recover its answer without another model call or device effect.
                 self.store.update(run['id'], status='completed', calls=[],
                                   text=messages[-1].get('content') or '', history=messages,
-                                  error='', retry_after=0)
+                                  memory=snapshot.values.get('memory', run.get('memory', {})), error='', retry_after=0)
             elif snapshot.tasks and any(task.interrupts for task in snapshot.tasks):
                 calls = snapshot.values.get('calls', [])
                 key = ','.join(c['id'] for c in calls)

@@ -18,17 +18,21 @@ class AgentSession(private val storage: AgentStorage, private val api: AgentApi,
         catch (_: Exception) { mutable.value = mutable.value.copy(ready = false, notice = "本地助手记录无法读取，原文件已保留，请先修复本地记录。") }
     } }
     suspend fun connection() = storage.connection()
+    suspend fun probeSsh(value: AgentSshConfig) = api.probeSsh(value)
     fun configure(value: AgentConnection) = scope.launch {
         try {
             require(!mutable.value.working)
             val url = agentServiceUrl(value.url)
-            val sameService = url == agentServiceUrl(storage.connection().url)
+            value.ssh?.validate()
+            if (value.ssh != null) require(url.startsWith("http://"))
+            val sameService = value.copy(url = url).sameServer(storage.connection())
             if (!sameService) {
                 require(mutable.value.history.cancelPending == null && !mutable.value.history.deletePending)
                 require(mutable.value.history.turns.lastOrNull()?.let { it.run?.terminal == true } != false)
             }
             require(value.token.length >= 32 && value.token.all { it.code in 33..126 })
             storage.saveConnection(value.copy(url = url))
+            api.closeConnection()
             mutable.value = mutable.value.copy(connected = true, notice = "连接配置已保存")
         } catch (_: Exception) { mutable.value = mutable.value.copy(notice = "请填写有效的服务地址和访问令牌，并先结束或恢复当前任务。") }
     }
@@ -51,9 +55,10 @@ class AgentSession(private val storage: AgentStorage, private val api: AgentApi,
             try { block() }
             catch (e: CancellationException) { throw e }
             catch (e: AgentApiException) { failureNotice(agentError(e.code)) }
-            catch (_: IOException) { failureNotice("无法连接助手服务，请检查服务地址、内网或 VPN；使用本机地址时需建立 ADB 8787 端口转发。") }
+            catch (e: AgentTransportException) { failureNotice(agentError(e.code)) }
+            catch (_: IOException) { failureNotice("连接已中断，请检查网络或 VPN 后点击恢复连接；SSH 模式会重新建立隧道并继续原任务。") }
             catch (_: Exception) { failureNotice(if (mutable.value.history.deletePending) "请检查连接或本地存储后重试。" else "连接已中断，恢复连接会继续当前任务，不会重新执行已记录操作。") }
-            finally { mutable.value = mutable.value.copy(working = false) }
+            finally { api.closeConnection(); mutable.value = mutable.value.copy(working = false) }
         }
     }
     fun send(question: String) {

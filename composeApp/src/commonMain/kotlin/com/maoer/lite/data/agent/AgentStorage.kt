@@ -29,8 +29,13 @@ class AgentStorage {
             finally { fs.delete(tmp, mustExist = false) }
         }
     }
-    suspend fun connection() = read("connection.json")?.let { json.decodeFromString<AgentConnection>(it) } ?: AgentConnection()
-    suspend fun saveConnection(value: AgentConnection) = write("connection.json", json.encodeToString(value))
+    suspend fun connection(): AgentConnection {
+        val text = read("connection.json") ?: return AgentConnection()
+        val connection = json.decodeFromString<AgentConnection>(if (text.startsWith("enc:v1:")) unprotectAgentConnection(text) else text)
+        if (!text.startsWith("enc:v1:")) saveConnection(connection)
+        return connection
+    }
+    suspend fun saveConnection(value: AgentConnection) = write("connection.json", protectAgentConnection(json.encodeToString(value)))
     suspend fun history() = read("history.json")?.let { json.decodeFromString<AgentHistory>(it) } ?: AgentHistory()
     suspend fun saveHistory(value: AgentHistory) = write("history.json", json.encodeToString(value))
     suspend fun execution(key: String) = read("execution-$key.json")?.let { json.decodeFromString<AgentExecution>(it) }

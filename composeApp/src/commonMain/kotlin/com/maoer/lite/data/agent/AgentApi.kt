@@ -12,6 +12,9 @@ import kotlinx.serialization.json.*
 class AgentApiException(val code: String, val status: Int) : Exception(code)
 
 class AgentApi(private val storage: AgentStorage) {
+    private val transport = AgentTransport()
+    fun closeConnection() = transport.close()
+    suspend fun probeSsh(ssh: AgentSshConfig) = transport.probe(ssh)
     private val json = Json { ignoreUnknownKeys = true }
     // Separate from RSS client: an idle model can take much longer than a feed request.
     private val client = HttpClient { install(HttpTimeout) {
@@ -20,7 +23,7 @@ class AgentApi(private val storage: AgentStorage) {
     private suspend fun request(path: String, value: String? = null, post: Boolean = false): AgentRun {
         val connection = storage.connection()
         require(connection.token.isNotBlank()) { "connection_missing" }
-        val response = client.request(connection.url.trimEnd('/') + path) {
+        val response = client.request(transport.endpoint(connection) + path) {
             method = if (post) HttpMethod.Post else HttpMethod.Get
             header(HttpHeaders.Authorization, "Bearer ${connection.token}")
             if (value != null) { contentType(ContentType.Application.Json); setBody(value) }
@@ -42,7 +45,7 @@ class AgentApi(private val storage: AgentStorage) {
     suspend fun deleteConversation(id: String) {
         val connection = storage.connection()
         require(connection.token.isNotBlank()) { "connection_missing" }
-        val response = client.request(connection.url.trimEnd('/') + "/v1/agent/conversations/${id.encodeURLPathPart()}") {
+        val response = client.request(transport.endpoint(connection) + "/v1/agent/conversations/${id.encodeURLPathPart()}") {
             method = HttpMethod.Delete
             header(HttpHeaders.Authorization, "Bearer ${connection.token}")
         }
@@ -53,7 +56,7 @@ class AgentApi(private val storage: AgentStorage) {
     }
     suspend fun events(id: String, update: suspend (AgentRun) -> Unit) {
         val connection = storage.connection()
-        client.prepareGet(connection.url.trimEnd('/') + "/v1/agent/runs/$id/events") {
+        client.prepareGet(transport.endpoint(connection) + "/v1/agent/runs/$id/events") {
             header(HttpHeaders.Authorization, "Bearer ${connection.token}")
         }.execute { response ->
             if (response.status.value != 200) fail(response.bodyAsText(), response.status.value)

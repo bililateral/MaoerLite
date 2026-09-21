@@ -22,7 +22,25 @@ fun agentServiceUrl(value: String): String {
     return url.toString().trimEnd('/')
 }
 
-@Serializable data class AgentConnection(val url: String = "http://127.0.0.1:8787", val token: String = "")
+@Serializable data class AgentSshConfig(
+    val host: String = "", val port: Int = 22, val username: String = "",
+    val password: String = "", val fingerprint: String = "",
+) {
+    override fun toString() = "AgentSshConfig(credentials=redacted)"
+    fun validate(requireCredentials: Boolean = true) {
+        require(host.isNotBlank() && host.length <= 253 && host.all { it.isLetterOrDigit() || it in ".-" })
+        require(port in 1..65535 && username.isNotBlank() && username.length <= 64 && username.none { it.isWhitespace() || it.isISOControl() })
+        if (requireCredentials) {
+            require(password.isNotEmpty() && password.length <= 1024)
+            require(Regex("SHA256:[A-Za-z0-9+/]{43}").matches(fingerprint))
+        }
+    }
+}
+@Serializable data class AgentConnection(val url: String = "http://127.0.0.1:8787", val token: String = "", val ssh: AgentSshConfig? = null) {
+    override fun toString() = "AgentConnection(credentials=redacted)"
+    fun sameServer(other: AgentConnection): Boolean = agentServiceUrl(url) == agentServiceUrl(other.url) &&
+        ssh?.host == other.ssh?.host && ssh?.port == other.ssh?.port
+}
 @Serializable data class AgentCall(val id: String, val name: String, val arguments: JsonObject)
 @Serializable data class AgentReceipt(val call_id: String, val result: JsonObject)
 @Serializable data class AgentRun(
@@ -43,6 +61,10 @@ fun agentId(): String {
 }
 
 fun agentError(code: String): String = when (code) {
+    "ssh_host_key_changed" -> "服务器身份与已确认指纹不一致，连接已拒绝；请核对服务器后再更新指纹"
+    "ssh_auth_failed" -> "SSH 用户名或密码错误，请在连接设置中修正"
+    "ssh_connection_failed" -> "SSH 连接失败，请检查服务器地址、端口和内网或 VPN，随后恢复连接"
+    "ssh_unsupported" -> "当前平台暂不支持 SSH 隧道"
     "upstream_overloaded" -> "模型当前繁忙"
     "upstream_account_rate_limit", "local_rate_limit", "local_busy" -> "请求暂时受限"
     "upstream_timeout" -> "模型响应超时，可重试当前步骤"

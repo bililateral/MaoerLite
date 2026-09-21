@@ -1,6 +1,7 @@
 package com.maoer.lite.ui.agent
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
@@ -38,17 +39,27 @@ object AgentScreen : Screen {
         var input by rememberSaveable { mutableStateOf("") }
         var settings by remember { mutableStateOf(false) }
         val list = rememberLazyListState()
+        val dragging by list.interactionSource.collectIsDraggedAsState()
+        var followReplies by remember { mutableStateOf(true) }
         val accent = Color(0xFFB83D36)
         val last = state.history.turns.lastOrNull()?.run
         val pending = state.history.deletePending || state.history.turns.lastOrNull()?.let { it.run?.terminal != true } == true || state.history.cancelPending != null
         LaunchedEffect(state.ready) {
             if (state.ready && state.connected && pending && !state.working) session.reconnect()
         }
-        LaunchedEffect(state.history.turns.size) {
-            if (state.history.turns.isNotEmpty()) list.animateScrollToItem(state.history.turns.lastIndex)
+        LaunchedEffect(dragging) {
+            if (dragging) followReplies = false
+            else if (!list.canScrollForward) followReplies = true
+        }
+        LaunchedEffect(state.history.turns.size) { followReplies = true }
+        LaunchedEffect(state.history.turns.size, last?.version, followReplies) {
+            if (followReplies && !dragging && state.history.turns.isNotEmpty()) {
+                withFrameNanos { }
+                list.scrollToItem(state.history.turns.size)
+            }
         }
         Scaffold(containerColor = Color(0xFFFAF7F2), topBar = {
-            TopAppBar(title = { Column { Text("语音助手", fontWeight = FontWeight.Bold); Text("找节目 · 控制播放", fontSize = 11.sp) } },
+            TopAppBar(title = { Column { Text("点播助手", fontWeight = FontWeight.Bold); Text("找节目 · 控制播放", fontSize = 11.sp) } },
                 navigationIcon = { IconButton(onClick = { navigator?.pop() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } },
                 actions = {
                     IconButton(onClick = { session.newConversation() }, enabled = !state.working && !pending) { Icon(Icons.Default.AddComment, "新对话") }
@@ -127,6 +138,7 @@ object AgentScreen : Screen {
                         }
                     }
                 }
+                item(key = "conversation-end") { Spacer(Modifier.height(1.dp)) }
             }
         }
         if (settings) AgentConnectionDialog(session) { settings = false }

@@ -123,7 +123,7 @@ object HomeScreen : Screen {
                     TextButton(onClick = { navigator?.push(AgentScreen) }, modifier = Modifier.padding(start = 16.dp)) {
                         Icon(Icons.Default.AutoAwesome, null, tint = accent, modifier = Modifier.size(17.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text("AI 助手 · 用一句话，找到想听的", color = accent, fontSize = 12.sp)
+                        Text("点播助手 · 用一句话，找到想听的", color = accent, fontSize = 12.sp)
                         Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = accent, modifier = Modifier.padding(start = 8.dp).size(16.dp))
                     }
                     LazyColumn(state = listState, modifier = Modifier.weight(1f),

@@ -35,6 +35,8 @@ class PodcastRepository(
             val previous = cache.read(id)
             client.prepareGet(source.feedUrl) {
                 header(HttpHeaders.UserAgent, "MaoerLite/0.2 (podcast RSS reader)")
+                // This client also serves JSON APIs. RSS endpoints can reject a JSON-only Accept with 406.
+                header(HttpHeaders.Accept, "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8")
                 previous?.etag?.let { header(HttpHeaders.IfNoneMatch, it) }
                 previous?.modified?.let { header(HttpHeaders.IfModifiedSince, it) }
             }.execute { response ->

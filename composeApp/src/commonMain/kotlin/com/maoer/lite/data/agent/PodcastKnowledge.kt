@@ -33,6 +33,7 @@ class PodcastKnowledge(private val repository: PodcastRepository) {
             putJsonArray("items") { add(buildJsonObject {
                 put("kind", "podcast"); put("id", id); put("title", feed.title.take(300))
                 put("category", loaded.source.category); put("author", feed.author.take(200))
+                put("catalog_summary", agentCatalogSummary(feed))
                 evidence(loaded, "节目简介", feed.description.take(2400), feed.description.length > 2400)
             }) }
         }

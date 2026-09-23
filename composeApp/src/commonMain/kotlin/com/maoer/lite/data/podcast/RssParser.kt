@@ -18,6 +18,7 @@ class RssParser {
         val reader = xmlStreaming.newGenericReader(xml.removePrefix("\uFEFF"))
         val stack = mutableListOf<Node>()
         val entries = mutableListOf<Entry>()
+        var rawItems = 0; var rejectedItems = 0; var cappedItems = 0
         var entry: Entry? = null
         var title = source.title; var author = ""; var description = ""; var cover = source.coverUrl
         var channelFound = false
@@ -30,7 +31,7 @@ class RssParser {
                         val parent = stack.lastOrNull()?.name
                         stack.add(node)
                         if (node.name == "channel" && parent == "rss") channelFound = true
-                        if (node.name == "item" && parent == "channel") entry = Entry()
+                        if (node.name == "item" && parent == "channel") { entry = Entry(); rawItems++ }
                         if (node.name == "enclosure" && parent == "item") {
                             val mime = reader.getAttributeValue(null, "type").orEmpty()
                             if (mime.isBlank() || mime.startsWith("audio/") || mime == "application/octet-stream") {
@@ -71,8 +72,10 @@ class RssParser {
                             safeUrl(value).takeIf { it.isNotBlank() }?.let { cover = it }
                         }
                         if (node.name == "item" && parent?.name == "channel") {
-                            entry?.takeIf { it.url.isNotBlank() && it.title.isNotBlank() }?.let {
-                                if (entries.size < 1000) entries.add(it)
+                            entry?.let {
+                                if (it.url.isBlank() || it.title.isBlank()) rejectedItems++
+                                else if (entries.size < 1000) entries.add(it)
+                                else cappedItems++
                             }
                             entry = null
                         } else if (parent != null && parent.value.length < 32_768) {
@@ -93,7 +96,8 @@ class RssParser {
                 e.description, e.cover, e.published, e.duration)
         }.distinctBy { it.id }
         require(episodes.isNotEmpty()) { "节目源中没有可播放的音频分集" }
-        return PodcastFeed(source.id, title, author, description, cover, episodes)
+        return PodcastFeed(source.id, title, author, description, cover, episodes,
+            FeedDiagnostics(rawItems, rejectedItems, cappedItems, entries.size - episodes.size))
     }
 
     companion object {

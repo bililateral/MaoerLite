@@ -33,6 +33,9 @@ data class PodcastEpisode(
 }
 
 @Serializable
+data class FeedDiagnostics(val rawItems: Int, val rejectedItems: Int, val cappedItems: Int, val duplicateItems: Int)
+
+@Serializable
 data class PodcastFeed(
     val sourceId: String,
     val title: String,
@@ -40,6 +43,7 @@ data class PodcastFeed(
     val description: String,
     val coverUrl: String,
     val episodes: List<PodcastEpisode>,
+    val diagnostics: FeedDiagnostics? = null,
 )
 
 @Serializable

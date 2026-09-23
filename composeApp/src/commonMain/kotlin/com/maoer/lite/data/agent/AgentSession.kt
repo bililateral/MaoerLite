@@ -14,7 +14,13 @@ class AgentSession(private val storage: AgentStorage, private val api: AgentApi,
     val state = mutable.asStateFlow()
     private var job: Job? = null
     init { scope.launch {
-        try { mutable.value = AgentUiState(storage.history(), ready = true, connected = storage.connection().token.isNotBlank()) }
+        try {
+            val saved = storage.history()
+            val history = if (saved.starterQuestions.isEmpty()) {
+                saved.copy(starterQuestions = agentStarterQuestions()).also { storage.saveHistory(it) }
+            } else saved
+            mutable.value = AgentUiState(history, ready = true, connected = storage.connection().token.isNotBlank())
+        }
         catch (_: Exception) { mutable.value = mutable.value.copy(ready = false, notice = "本地助手记录无法读取，原文件已保留，请先修复本地记录。") }
     } }
     suspend fun connection() = storage.connection()
@@ -128,13 +134,13 @@ class AgentSession(private val storage: AgentStorage, private val api: AgentApi,
             if (old.turns.isNotEmpty()) {
                 save(old.copy(deletePending = true))
                 finishNewConversation(mutable.value.history)
-            } else save(AgentHistory())
+            } else save(AgentHistory(starterQuestions = agentStarterQuestions(old.starterQuestions)))
         }
     }
     private suspend fun finishNewConversation(old: AgentHistory) {
         api.deleteConversation(old.conversationId)
         // If the response or this local write fails, keep the durable deletion
         // intent. Reconnect repeats DELETE rather than recreating an old run.
-        save(AgentHistory())
+        save(AgentHistory(starterQuestions = agentStarterQuestions(old.starterQuestions)))
     }
 }

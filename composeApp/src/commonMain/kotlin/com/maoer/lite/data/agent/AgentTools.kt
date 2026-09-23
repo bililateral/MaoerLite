@@ -13,6 +13,7 @@ import okio.ByteString.Companion.encodeUtf8
 class AgentTools(private val repository: PodcastRepository, private val player: PlayerManager,
                  private val storage: AgentStorage, private val api: AgentApi) {
     private val search = PodcastSearchIndex(repository.sources)
+    private val knowledge = PodcastKnowledge(repository)
     private fun state(status: String = "ok", note: String = "") = buildJsonObject {
         put("status", status); put("note", note)
         put("playing", player.isPlaying.value); put("buffering", player.buffering.value)
@@ -64,6 +65,15 @@ class AgentTools(private val repository: PodcastRepository, private val player: 
     private suspend fun perform(call: AgentCall): JsonObject {
         val args = call.arguments
         return when (call.name) {
+            "get_podcast_details" -> {
+                require(args.keys == setOf("podcast_id"))
+                knowledge.details(args.getValue("podcast_id").jsonPrimitive.content)
+            }
+            "search_podcast_content" -> {
+                require(args.keys.all { it in setOf("keywords", "podcast_id") })
+                val keywords = args.getValue("keywords").jsonArray.map { it.jsonPrimitive.content }
+                knowledge.search(keywords, args["podcast_id"]?.jsonPrimitive?.content.orEmpty())
+            }
             "search_catalog" -> {
                 require(args.keys == setOf("query"))
                 val query = args.getValue("query").jsonPrimitive.content

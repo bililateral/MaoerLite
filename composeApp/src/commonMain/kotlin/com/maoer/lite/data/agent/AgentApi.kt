@@ -62,7 +62,7 @@ class AgentApi(private val storage: AgentStorage) {
             if (response.status.value != 200) fail(response.bodyAsText(), response.status.value)
             val channel = response.bodyAsChannel()
             while (true) {
-                val line = channel.readUTF8Line(256_000) ?: break
+                val line = channel.readUTF8Line(1_048_576) ?: break
                 if (line.startsWith("data: ")) update(json.decodeFromString<AgentRun>(line.removePrefix("data: ")))
             }
         }

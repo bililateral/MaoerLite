@@ -2,12 +2,16 @@ package com.maoer.lite.data.agent
 
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.utils.io.readUTF8Line
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 
 class AgentApiException(val code: String, val status: Int) : Exception(code)
 
@@ -20,6 +24,27 @@ class AgentApi(private val storage: AgentStorage) {
     private val client = HttpClient { install(HttpTimeout) {
         requestTimeoutMillis = 240_000; connectTimeoutMillis = 10_000; socketTimeoutMillis = 35_000
     } }
+    /** Read-only authenticated probe. A missing run proves auth, not a failed connection. */
+    suspend fun checkConnection(connection: AgentConnection, runId: String): AgentRun? {
+        val probe = AgentTransport()
+        try {
+            return withTimeout(25_000) {
+                val response = client.get(probe.endpoint(connection) + "/v1/agent/runs/${runId.encodeURLPathPart()}") {
+                    header(HttpHeaders.Authorization, "Bearer ${connection.token}")
+                    timeout { requestTimeoutMillis = 10_000; socketTimeoutMillis = 10_000 }
+                }
+                val body = response.bodyAsText()
+                if (response.status.value !in 200..299) {
+                    try { fail(body, response.status.value) }
+                    catch (e: AgentApiException) {
+                        if (e.status == 404 && e.code == "run_not_found") return@withTimeout null
+                        throw e
+                    }
+                }
+                json.decodeFromString<AgentRun>(body)
+            }
+        } finally { withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { probe.close() } }
+    }
     private suspend fun request(path: String, value: String? = null, post: Boolean = false): AgentRun {
         val connection = storage.connection()
         require(connection.token.isNotBlank()) { "connection_missing" }

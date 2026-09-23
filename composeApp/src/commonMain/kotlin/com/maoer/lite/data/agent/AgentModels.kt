@@ -41,6 +41,23 @@ fun agentServiceUrl(value: String): String {
     fun sameServer(other: AgentConnection): Boolean = agentServiceUrl(url) == agentServiceUrl(other.url) &&
         ssh?.host == other.ssh?.host && ssh?.port == other.ssh?.port
 }
+
+/** Only fixed messages: never interpolate credential values into validation errors. */
+fun AgentConnection.validationError(): String? {
+    if (runCatching { agentServiceUrl(url) }.isFailure) return "服务地址格式不正确，例如 http://127.0.0.1:8787。"
+    if (token.length < 32 || token.any { it.code !in 33..126 }) return "服务访问令牌格式不正确，请复制 agent-server.token 中的完整一行。"
+    ssh?.let {
+        if (it.host.isBlank() || it.host.length > 253 || it.host.any { c -> !c.isLetterOrDigit() && c !in ".-" })
+            return "SSH 服务器只填 IP 或域名，不要填写 http:// 或端口。"
+        if (it.port !in 1..65535) return "SSH 端口应为 1–65535 的整数，通常填 22。"
+        if (it.username.isBlank() || it.username.length > 64 || it.username.any { c -> c.isWhitespace() || c.isISOControl() })
+            return "请填写有效的 SSH 用户名。"
+        if (it.password.isEmpty() || it.password.length > 1024) return "请填写 SSH 密码。"
+        if (!Regex("SHA256:[A-Za-z0-9+/]{43}").matches(it.fingerprint)) return "请先读取服务器指纹，核对后点击信任。"
+        if (!agentServiceUrl(url).startsWith("http://")) return "SSH 隧道内请填写 http:// 开头的服务地址。"
+    }
+    return null
+}
 @Serializable data class AgentCall(val id: String, val name: String, val arguments: JsonObject)
 @Serializable data class AgentReceipt(val call_id: String, val result: JsonObject)
 @Serializable data class AgentRun(
@@ -54,6 +71,19 @@ fun agentServiceUrl(value: String): String {
 @Serializable data class AgentTurn(val id: String, val question: String, val run: AgentRun? = null)
 @Serializable data class AgentHistory(val conversationId: String = agentId(), val turns: List<AgentTurn> = emptyList(), val cancelPending: String? = null, val deletePending: Boolean = false,
                                      val starterQuestions: List<String> = emptyList())
+
+fun AgentHistory.requireRecoverableConnection(remote: AgentRun?) {
+    val turn = turns.lastOrNull()
+    val pending = deletePending || cancelPending != null || turn?.let { it.run?.terminal != true } == true
+    if (!pending) return
+    check(remote == null || (remote.id == (cancelPending ?: turn?.id) && remote.conversation_id == conversationId)) {
+        "新连接返回的任务身份不一致，未保存；请检查服务器地址。"
+    }
+    // Without any saved run, follow() has not dispatched a device tool. Retain the request ID.
+    check(remote != null || (turn?.run == null && !deletePending && cancelPending == null)) {
+        "该服务找不到原任务，未保存；请连接原服务器完成任务，避免重复操作。"
+    }
+}
 @Serializable data class AgentNewRun(val id: String, val conversation_id: String, val message: String)
 @Serializable data class AgentResults(val results: List<AgentReceipt>)
 @Serializable data class AgentExecution(val fingerprint: String, val result: JsonObject? = null)

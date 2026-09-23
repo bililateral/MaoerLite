@@ -3,8 +3,9 @@ import asyncio
 import json
 import time
 import httpx
-from protocol import ChatRequest
-from rate_limit import Throttle
+from pydantic import Field
+from protocol import ChatRequest, Message
+from rate_limit import Throttle, upstream_failure_code
 
 
 class ModelFailure(Exception):
@@ -13,10 +14,18 @@ class ModelFailure(Exception):
         super().__init__(code)
 
 
+class AgentChatRequest(ChatRequest):
+    # 24 sequential tool rounds plus bounded history and the final answer.
+    messages: list[Message] = Field(min_length=1, max_length=160)
+    max_tokens: int = Field(default=4096, ge=1, le=4096)
+
+
 async def generate(app, settings, messages, tools, publish):
     from app import limited_upstream, sse_data, TOTAL_TIMEOUT
-    payload = ChatRequest.model_validate({'messages': messages, 'tools': tools,
-                                         'tool_choice': 'auto', 'stream': True, 'max_tokens': 1024})
+    payload = AgentChatRequest.model_validate({'messages': messages, 'tools': tools or None,
+                                              'tool_choice': 'auto' if tools else None,
+                                              'stream': True, 'max_tokens': 4096})
+    body = payload.upstream_body(settings)
     gate = app.state.gate
     refusal = gate.enter()
     if isinstance(refusal, Throttle):
@@ -30,7 +39,7 @@ async def generate(app, settings, messages, tools, publish):
         async def read():
             nonlocal response, text
             request = app.state.client.build_request('POST', settings.endpoint,
-                headers={'Authorization': 'Bearer ' + settings.api_key}, json=payload.upstream_body(settings))
+                headers={'Authorization': 'Bearer ' + settings.api_key}, json=body)
             response = await app.state.client.send(request, stream=True)
             if response.status_code == 429:
                 try:
@@ -40,7 +49,11 @@ async def generate(app, settings, messages, tools, publish):
                 limit = gate.limiter.record(data, response.headers.get('Retry-After'))
                 raise ModelFailure(limit.code, limit.retryable, limit.retry_after)
             if response.status_code != 200:
-                raise ModelFailure('upstream_auth_failed' if response.status_code in (401, 403) else 'upstream_error')
+                try:
+                    data = await limited_upstream(response, 16384)
+                except (ValueError, UnicodeError, httpx.HTTPError):
+                    data = {}
+                raise ModelFailure(upstream_failure_code(response.status_code, data))
             finish = None
             async for raw in sse_data(response, started + TOTAL_TIMEOUT):
                 if raw == '[DONE]':

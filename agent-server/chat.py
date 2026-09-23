@@ -12,7 +12,7 @@ ERROR_MESSAGES = {
     'upstream_account_rate_limit': '上游账户请求速率受限。',
     'upstream_overloaded': '上游模型当前繁忙。',
     'upstream_account_arrears': '上游账户状态受限（欠费），请核查控制台；不会自动重试或切换模型。',
-    'upstream_quota_exhausted': '上游使用额度已达上限，请在控制台核查额度与重置时间。',
+    'upstream_quota_exhausted': '上游账户余额或额度不足，请在控制台补充额度后重试。',
     'upstream_account_restricted': '上游账户或套餐权限受限，请核查控制台。',
     'upstream_rate_limit_unknown': '上游返回 429，但原因无法确认；已停止自动重试。',
     'local_rate_limit': '发送较频繁，请约一分钟后重试。',

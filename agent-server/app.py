@@ -15,7 +15,7 @@ from pydantic import ValidationError
 
 from config import ROOT, Settings
 from protocol import ChatRequest, public_response
-from rate_limit import RateLimitPolicy, Throttle
+from rate_limit import RateLimitPolicy, Throttle, upstream_failure_code
 
 LOG = logging.getLogger('maoer.agent')
 MAX_BODY = 65536
@@ -202,7 +202,13 @@ def create_app(settings: Settings, transport=None, agent_db=None):
                 except (ValueError, UnicodeError, httpx.HTTPError):
                     data = {}
                 return gate.limiter.record(data, response.headers.get('Retry-After'))
-            if response.status_code != 200 or payload.stream:
+            if response.status_code != 200:
+                try:
+                    data = await limited_upstream(response, limit=16384)
+                except (ValueError, UnicodeError, httpx.HTTPError):
+                    data = {}
+                return upstream_failure_code(response.status_code, data)
+            if payload.stream:
                 return None
             return public_response(await limited_upstream(response))
 
@@ -220,7 +226,7 @@ def create_app(settings: Settings, transport=None, agent_db=None):
                 if response.status_code == 429:
                     outcome = result.code
                     return error(429, outcome, request_id, **result.details(), cooldown=False)
-                outcome = 'upstream_auth_failed' if response.status_code in (401, 403) else 'upstream_error'
+                outcome = result
                 return error(502, outcome, request_id)
             headers = {'X-Request-Id': request_id, 'Cache-Control': 'no-store'}
             if not payload.stream:

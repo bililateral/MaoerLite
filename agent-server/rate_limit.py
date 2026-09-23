@@ -1,4 +1,4 @@
-"""Sanitized upstream 429 classification and process-wide cooldown."""
+"""Sanitized upstream failure classification and process-wide cooldown."""
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -18,6 +18,19 @@ class Throttle:
 
     def details(self):
         return {k: v for k, v in vars(self).items() if k != 'code' and v is not None}
+
+
+QUOTA_CODES = frozenset(('insufficient_quota', 'insufficient_user_quota',
+                         'insufficient_token_quota', 'billing_hard_limit_reached'))
+
+
+def upstream_failure_code(status, data):
+    """A relay may return billing failures as HTTP 403; never expose its body."""
+    error = data.get('error') if isinstance(data, dict) else None
+    code = error.get('code') if isinstance(error, dict) else None
+    if status == 402 or (isinstance(code, str) and code in QUOTA_CODES):
+        return 'upstream_quota_exhausted'
+    return 'upstream_auth_failed' if status in (401, 403) else 'upstream_error'
 
 
 def retry_after_seconds(value, now=None):
@@ -56,6 +69,7 @@ class RateLimitPolicy:
             'billing_hard_limit_reached': ('upstream_quota_exhausted', False),
             'invalid_api_key': ('upstream_account_restricted', False),
         }
+        mapping.update({key: ('upstream_quota_exhausted', False) for key in QUOTA_CODES})
         code, retryable = mapping.get(upstream, ('upstream_rate_limit_unknown', False))
         self.failures = min(self.failures + 1, 4)
         local = (30, 60, 120, 300)[self.failures - 1] + self.jitter()

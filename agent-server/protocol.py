@@ -1,5 +1,6 @@
 """The local text/function-call protocol; no execution of model tools here."""
 import json
+from urllib.parse import urlsplit
 from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -98,7 +99,14 @@ class ChatRequest(StrictModel):
     def upstream_body(self, settings: Settings):
         if self.model is not None and self.model != settings.model:
             raise ValueError('Only the configured model is enabled')
-        return {**self.model_dump(exclude_none=True), 'model': settings.model}
+        body = {**self.model_dump(exclude_none=True), 'model': settings.model}
+        # Official DeepSeek defaults to thinking. Both gateway and Agent must
+        # explicitly select non-thinking, including after model alias changes.
+        if urlsplit(settings.base_url).hostname == 'api.deepseek.com' or settings.model in (
+            'deepseek-flash', 'deepseek-v4.1-flash',
+        ):
+            body['thinking'] = {'type': 'disabled'}
+        return body
 
 
 def public_response(data: dict) -> dict:

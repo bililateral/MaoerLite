@@ -6,8 +6,8 @@ import secrets
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_MODEL = 'deepseek-v4-flash-0731'
-DEFAULT_BASE_URL = 'https://www.dafangyuntu.com/ai/v1'
+DEFAULT_MODEL = 'deepseek-flash'
+DEFAULT_BASE_URL = 'https://api.deepseek.com'
 
 
 @dataclass(frozen=True)

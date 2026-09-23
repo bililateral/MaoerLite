@@ -32,6 +32,9 @@ class AgentTools(private val repository: PodcastRepository, private val player: 
         put("sleep_remaining_ms", player.sleepTimer.value.remainingMs)
         put("sleep_end_of_episode", player.sleepTimer.value.endOfEpisode)
         put("playback_error", player.playbackError.value.orEmpty())
+        val source = repository.sources.firstOrNull { it.id == player.currentAudio.value?.podcastId }
+        put("download_available", source?.let { JsonPrimitive(it.downloadAllowed) } ?: JsonNull)
+        put("download_available_sources", repository.sources.count { it.downloadAllowed })
     }
     private fun error(note: String) = buildJsonObject { put("status", "error"); put("note", note) }
     suspend fun execute(run: String, call: AgentCall): AgentReceipt {
@@ -81,30 +84,23 @@ class AgentTools(private val repository: PodcastRepository, private val player: 
                 val matches = search.search(query)
                 buildJsonObject {
                     put("status", "ok"); put("total", matches.size)
+                    put("query", query); put("search_scope", "内置节目名称、分类及其拼音索引，不搜索RSS正文")
+                    if (repository.sources.any { it.category == query.trim() }) {
+                        put("exact_category", query.trim())
+                        put("category_total", repository.sources.count { it.category == query.trim() })
+                        put("note", "该分类数量已完整统计；不足时如实说明，不用同义词或拼音重复查找凑数，扩大类别需先询问用户。")
+                    }
                     putJsonArray("items") { matches.take(8).forEach { source -> add(buildJsonObject {
                         put("kind", "podcast"); put("id", source.id); put("title", source.title); put("category", source.category)
                     }) } }
                 }
             }
             "list_episodes" -> {
-                require(args.keys.all { it in setOf("podcast_id", "query") })
                 val id = args.getValue("podcast_id").jsonPrimitive.content
                 repository.source(id)
                 // Explicit refresh: latest episodes must not silently use a stale cache.
                 val feed = repository.refresh(id)
-                val query = args["query"]?.jsonPrimitive?.content.orEmpty()
-                val matches = feed.episodes.filter { query.isBlank() || it.title.contains(query, ignoreCase = true) }
-                val dates = matches.associate { it.id to agentPublishedMillis(it.published) }
-                val verified = matches.isNotEmpty() && dates.values.all { it != null }
-                val ordered = if (verified) matches.sortedByDescending { dates[it.id] } else matches
-                buildJsonObject {
-                    put("status", "ok"); put("total", matches.size); put("latest_verified", verified)
-                    put("order", if (verified) "publication_desc" else "source_order_unverified")
-                    putJsonArray("items") { ordered.take(8).forEach { episode -> add(buildJsonObject {
-                        put("kind", "episode"); put("id", episode.id); put("podcast_id", id)
-                        put("title", episode.title.take(300)); put("published", episode.published); put("duration_seconds", episode.durationSeconds)
-                    }) } }
-                }
+                episodeSelection(feed, args)
             }
             "get_playback_state" -> { require(args.isEmpty()); state() }
             "play_episode" -> {

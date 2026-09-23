@@ -17,7 +17,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.runnables.config import set_config_context
 
 from agent_model import ModelFailure, generate
-from agent_tools import DEFINITIONS, SYSTEM, validated_calls
+from agent_tools import SYSTEM, definitions, validated_calls
 from agent_memory import context, last_turn, model_messages, references, remember, replay_references
 from agent_summary import (MAX_BATCHES, SUMMARY_TIMEOUT, batch, parse_summary,
                            summary_messages, with_summary)
@@ -39,10 +39,102 @@ class State(TypedDict):
     summary_candidates: list[str]
     summary: dict
     summary_pending: int
+    extended_episodes: bool
 
 
 class TaskConflict(Exception):
     pass
+
+
+def playback_preflight(messages, calls, run_id, round_number):
+    """Refresh cross-turn playback selections before any control in that model batch.
+
+    This is a read dependency, not a natural-language classifier. Discard the stale
+    plan and let the model choose again from actual device data and the user request.
+    """
+    requests, checked, attempted = {}, set(), set()
+    for message in last_turn(messages):
+        for call in message.get('tool_calls', []):
+            if call['function']['name'] == 'list_episodes':
+                requests[call['id']] = json.loads(call['function']['arguments'])['podcast_id']
+        if message['role'] == 'tool' and message['tool_call_id'] in requests:
+            podcast = requests[message['tool_call_id']]
+            attempted.add(podcast)
+            if json.loads(message['content']).get('status') == 'ok':
+                checked.add(podcast)
+    pending = list(dict.fromkeys(c['arguments']['podcast_id'] for c in calls
+                                if c['name'] == 'play_episode' and c['arguments']['podcast_id'] not in checked))
+    if any(podcast in attempted for podcast in pending):
+        raise ModelFailure('episode_refresh_failed')
+    return [{'id': 'refresh_' + hashlib.sha256(f'{run_id}:{round_number}:{podcast}'.encode()).hexdigest()[:24],
+             'name': 'list_episodes', 'arguments': {'podcast_id': podcast, 'query': ''}} for podcast in pending]
+
+
+def episode_selection_question(messages, calls):
+    """Show a position selection once; never silently switch its numeric meaning."""
+    starts = [i for i, message in enumerate(messages) if message['role'] == 'user']
+    previous = last_turn(messages[:starts[-1]]) if starts else []
+    prior_queries, shown = {}, set()
+    prior_play = any(c['function']['name'] == 'play_episode'
+                     for m in previous for c in m.get('tool_calls', []))
+    if not prior_play:
+        for message in previous:
+            for call in message.get('tool_calls', []):
+                if call['function']['name'] == 'list_episodes':
+                    prior_queries[call['id']] = json.loads(call['function']['arguments'])
+            if message['role'] == 'tool' and message['tool_call_id'] in prior_queries:
+                args = prior_queries[message['tool_call_id']]
+                result = json.loads(message['content'])
+                if args.get('position') and result.get('status') == 'ok':
+                    shown.update((args['podcast_id'], args['position'], args.get('order', 'newest'), item.get('id'))
+                                 for item in result.get('items', []))
+    queries, missing_numbers, missing_positions, alternatives, numbered, positioned = {}, set(), {}, {}, {}, {}
+    for message in last_turn(messages):
+        for call in message.get('tool_calls', []):
+            if call['function']['name'] == 'list_episodes':
+                queries[call['id']] = json.loads(call['function']['arguments'])
+        if message['role'] != 'tool' or message['tool_call_id'] not in queries:
+            continue
+        args = queries[message['tool_call_id']]
+        result = json.loads(message['content'])
+        if result.get('status') != 'ok':
+            continue
+        podcast = args['podcast_id']
+        number, position = args.get('episode_number', 0), args.get('position', 0)
+        if number and not result.get('items'):
+            missing_numbers.add((podcast, number))
+        if position and not result.get('items'):
+            missing_positions[(podcast, position)] = args.get('order', 'newest')
+        if number:
+            for item in result.get('items', []):
+                numbered[(podcast, item.get('id'))] = (number, item.get('title', ''))
+        if position:
+            for item in result.get('items', []):
+                positioned[(podcast, item.get('id'))] = (position, args.get('order', 'newest'), item.get('title', ''))
+                if item.get('title_episode_number') != position:
+                    alternatives[(podcast, item.get('id'))] = (position, args.get('order', 'newest'), item.get('title', ''))
+    for call in calls:
+        if call['name'] != 'play_episode':
+            continue
+        args = call['arguments']
+        numbered_item = numbered.get((args['podcast_id'], args['episode_id']))
+        if numbered_item and (args['podcast_id'], numbered_item[0]) in missing_positions:
+            number, title = numbered_item
+            order = missing_positions[(args['podcast_id'], number)]
+            order_name = {'source': '原始列表', 'reverse_source': '原始列表从末尾往前数', 'newest': '从新到旧列表'}[order]
+            return f'{order_name}没有第{number}条，但找到了标题期号为{number}的《{title}》。你是想播放这期吗？目前没有开始新的播放。'
+        alternative = alternatives.get((args['podcast_id'], args['episode_id']))
+        if alternative and (args['podcast_id'], alternative[0]) in missing_numbers:
+            position, order, title = alternative
+            order_name = {'source': '原始列表', 'reverse_source': '原始列表从末尾往前数', 'newest': '从新到旧列表'}[order]
+            return f'没有找到标题期号为{position}的分集。{order_name}第{position}条是《{title}》。你是想播放这条吗？目前没有开始新的播放。'
+        selected = positioned.get((args['podcast_id'], args['episode_id']))
+        if selected:
+            position, order, title = selected
+            if (args['podcast_id'], position, order, args['episode_id']) not in shown:
+                order_name = {'source': '原始列表', 'reverse_source': '原始列表从末尾往前数', 'newest': '从新到旧列表'}[order]
+                return f'{order_name}第{position}条是《{title}》。确认播放这一条吗？目前没有开始新的播放。'
+    return None
 
 
 class Store:
@@ -172,7 +264,7 @@ class AgentTasks:
             self.store.update(run_id, text='', status='generating', retry_after=0, error='')
             try:
                 message = await self.model(self.app, self.settings,
-                                           messages, [] if final_only else DEFINITIONS, publish)
+                                           messages, [] if final_only else definitions(state.get('extended_episodes', False)), publish)
                 break
             except ModelFailure as exc:
                 if (not exc.retryable or attempt == 2 or waited + exc.delay > 120
@@ -182,7 +274,7 @@ class AgentTasks:
                                   retry_at=int(time.time() + exc.delay))
                 await asyncio.sleep(exc.delay)
                 waited += exc.delay
-        calls = validated_calls(message)
+        calls = validated_calls(message, state.get('extended_episodes', False))
         if final_only and calls:
             raise ModelFailure('tool_round_limit')
         if calls:
@@ -208,6 +300,18 @@ class AgentTasks:
             seen = {c['id'] for m in state['messages'] for c in m.get('tool_calls', [])}
             if any(not i or i in seen for i in ids):
                 raise ModelFailure('invalid_tool_call')
+            clarification = episode_selection_question(state['messages'], calls)
+            if clarification:
+                return {'messages': state['messages'] + [{'role': 'assistant', 'content': clarification}],
+                        'rounds': state['rounds'] + 1, 'calls': [], 'tool_count': state.get('tool_count', 0)}
+            refresh = playback_preflight(state['messages'], calls, run_id, state['rounds'])
+            if refresh:
+                if any(call['id'] in seen for call in refresh):
+                    raise ModelFailure('invalid_tool_call')
+                calls = refresh
+                message = {'role': 'assistant', 'content': '播放前先核对本轮RSS，再继续完成用户要求；原控制计划尚未执行。用户选择旧列表位置时仍按原展示列表，不用补查列表重新编号；用户要求最新时按刷新结果选择。',
+                           'tool_calls': [{'id': c['id'], 'type': 'function', 'function': {
+                               'name': c['name'], 'arguments': json.dumps(c['arguments'], ensure_ascii=False)}} for c in calls]}
         count = state.get('tool_count', 0)
         if count + len(calls) > MAX_TOOL_CALLS:
             # Do not partially execute an over-budget batch. Close every call
@@ -293,6 +397,9 @@ class AgentTasks:
     def create(self, request):
         if self.store.deleted(request.conversation_id): raise TaskConflict('conversation_deleted')
         value = request.model_dump()
+        # Preserve idempotency for requests persisted before capability negotiation existed.
+        if not value.get('capabilities'):
+            value.pop('capabilities', None)
         try:
             existing = self.store.get(request.id)
             if existing['input'] != value: raise TaskConflict('request_id_reused')
@@ -303,10 +410,13 @@ class AgentTasks:
         if any(r['status'] not in TERMINAL for r in previous): raise TaskConflict('conversation_busy')
         completed = [r for r in previous if r['status'] == 'completed']
         history, memory, evicted = context(completed)
-        messages = [{'role': 'system', 'content': SYSTEM}] + history + [{'role': 'user', 'content': request.message}]
+        extended = 'episode_selection_v2' in value.get('capabilities', [])
+        selection_policy = ('\n本客户端支持分集分页与位置选择。用户说第N集/第一集时用position=N、order=reverse_source，从原始RSS列表末尾往前数，第一集就是原始列表最后一条；不需要日期完整，也不按发布日期重排或匹配标题编号。首次找到后展示真实标题并问一次确认，下一轮确认后使用已展示ID播放，不反复确认。越界或查询失败不自动改查标题期号；明确第N期/标题期号N才用episode_number=N。明确原始列表第N条用source，从最新数用newest；当前页面排序未知时先澄清，不声称看到了页面。只要求查询或展示时不播放，也不强行询问是否播放。'
+            if extended else '\n本客户端仅支持标题查询，不支持完整列表定位或分页。用户说第N集时说明需升级或请给出具体标题，不得以返回的前8条猜测末尾位置。不要传入未定义参数。')
+        messages = [{'role': 'system', 'content': SYSTEM + selection_policy}] + history + [{'role': 'user', 'content': request.message}]
         initial = {'run_id': request.id, 'messages': messages, 'rounds': 0, 'calls': [], 'memory': memory,
                    'tool_count': 0, 'final_only': False, 'summary_candidates': [r['id'] for r in evicted],
-                   'summary': {}, 'summary_pending': 0}
+                   'summary': {}, 'summary_pending': 0, 'extended_episodes': extended}
         run = self.store.put({'id': request.id, 'conversation_id': request.conversation_id, 'status': 'generating',
             'text': '', 'calls': [], 'results': [], 'claimed': [], 'receipts': {}, 'error': '', 'retry_after': 0,
             'retry_at': 0, 'version': 0, 'input': value, 'history': [], 'memory': memory, 'created_at': int(time.time()),

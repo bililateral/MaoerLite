@@ -57,6 +57,9 @@ def clean_item(item, kind):
     for key in ('category', 'published'):
         if isinstance(item.get(key), str):
             result[key] = item[key][:150]
+    for key in ('source_position', 'ordered_position', 'title_episode_number'):
+        if type(item.get(key)) is int and 0 < item[key] <= 100000:
+            result[key] = item[key]
     return result
 
 
@@ -95,6 +98,9 @@ def remember(memory, run_id, calls, results):
                      'query': args.get('query') or ' '.join(args.get('keywords', [])), 'items': items}
             if kind == 'episode':
                 group['podcast_id'] = args.get('podcast_id', '')
+                if name == 'list_episodes':
+                    group['selection'] = {k: args[k] for k in ('order', 'offset', 'position', 'episode_number') if k in args}
+                    group['order'] = result.get('order', '')
             value['groups'] = [g for g in value['groups'] if g['source'] != source] + [group]
         elif name == 'play_episode' and result.get('playing') is True and result.get('episode_id') == args['episode_id']:
             item = next((i for i in references(value) if i['kind'] == 'episode'

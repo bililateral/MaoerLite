@@ -84,7 +84,8 @@ fun AgentHistory.requireRecoverableConnection(remote: AgentRun?) {
         "该服务找不到原任务，未保存；请连接原服务器完成任务，避免重复操作。"
     }
 }
-@Serializable data class AgentNewRun(val id: String, val conversation_id: String, val message: String)
+@Serializable data class AgentNewRun(val id: String, val conversation_id: String, val message: String,
+                                   val capabilities: List<String> = emptyList())
 @Serializable data class AgentResults(val results: List<AgentReceipt>)
 @Serializable data class AgentExecution(val fingerprint: String, val result: JsonObject? = null)
 
@@ -109,6 +110,7 @@ fun agentError(code: String): String = when (code) {
     "tool_round_limit" -> "本次任务步骤较多，请缩小请求范围"
     "task_not_retryable" -> "当前任务无法继续，请新建对话"
     "unverified_podcast_id", "unverified_episode_id", "invalid_agent_response", "invalid_tool_call" -> "助手未返回有效操作，可重试当前步骤"
+    "episode_refresh_failed" -> "本轮分集查询未成功，尚未开始新的播放，请稍后重试"
     "conversation_busy" -> "当前对话还有未结束的任务"
     "conversation_deleted" -> "旧对话已删除，请新建对话"
     "conversation_delete_failed" -> "服务端删除未完成，请重试删除"

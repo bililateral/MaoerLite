@@ -61,7 +61,15 @@ class AgentApi(private val storage: AgentStorage) {
         val code = runCatching { json.parseToJsonElement(body).jsonObject["error"]?.jsonObject?.get("code")?.jsonPrimitive?.content }.getOrNull()
         throw AgentApiException(code ?: "connection_error", status)
     }
-    suspend fun create(value: AgentNewRun) = request("/v1/agent/runs", json.encodeToString(value), true)
+    suspend fun create(value: AgentNewRun): AgentRun {
+        try { return request("/v1/agent/runs", json.encodeToString(value), true) }
+        catch (e: AgentApiException) {
+            // Old servers reject the capability field before creating a task. Negotiate
+            // once with the same ID; never replay timeouts, auth errors or model failures.
+            if (e.status != 400 || e.code != "invalid_request" || value.capabilities.isEmpty()) throw e
+            return request("/v1/agent/runs", json.encodeToString(value.copy(capabilities = emptyList())), true)
+        }
+    }
     suspend fun get(id: String) = request("/v1/agent/runs/$id")
     suspend fun cancel(id: String) = request("/v1/agent/runs/$id/cancel", post = true)
     suspend fun retry(id: String) = request("/v1/agent/runs/$id/retry", post = true)

@@ -82,7 +82,7 @@ class AgentSession(private val storage: AgentStorage, private val api: AgentApi,
         work {
             val turn = AgentTurn(agentId(), question.trim())
             save(old.copy(turns = (old.turns + turn).takeLast(30)))
-            follow(api.create(AgentNewRun(turn.id, old.conversationId, turn.question)))
+            follow(api.create(AgentNewRun(turn.id, old.conversationId, turn.question, listOf("episode_selection_v2"))))
         }
     }
     fun reconnect(retry: Boolean = false) = work {
@@ -99,7 +99,7 @@ class AgentSession(private val storage: AgentStorage, private val api: AgentApi,
         val turn = h.turns.lastOrNull() ?: return@work
         val run = try { api.get(turn.id) } catch (e: AgentApiException) {
             if (e.status != 404) throw e
-            api.create(AgentNewRun(turn.id, h.conversationId, turn.question))
+            api.create(AgentNewRun(turn.id, h.conversationId, turn.question, listOf("episode_selection_v2")))
         }
         follow(if (retry && run.status == "failed") api.retry(run.id) else run)
     }

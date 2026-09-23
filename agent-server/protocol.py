@@ -100,8 +100,8 @@ class ChatRequest(StrictModel):
         if self.model is not None and self.model != settings.model:
             raise ValueError('Only the configured model is enabled')
         body = {**self.model_dump(exclude_none=True), 'model': settings.model}
-        # Official DeepSeek defaults to thinking. Both gateway and Agent must
-        # explicitly select non-thinking, including after model alias changes.
+        # The public gateway stays non-thinking. The Agent adapter can opt in
+        # after adding private reasoning-field preservation and replay.
         if urlsplit(settings.base_url).hostname == 'api.deepseek.com' or settings.model in (
             'deepseek-flash', 'deepseek-v4.1-flash',
         ):

@@ -159,6 +159,7 @@ def create_app(settings: Settings, transport=None, agent_db=None):
     @app.get('/healthz')
     async def health():
         return {'status': 'ok', 'model': settings.model, 'provider': settings.provider,
+                'agent_thinking': settings.agent_thinking, 'reasoning_effort': settings.reasoning_effort if settings.agent_thinking else None,
                 'scope': 'local' if settings.host.startswith('127.') else 'private-network', 'runtime': 'python-fastapi'}
 
     @app.post('/v1/chat/completions')

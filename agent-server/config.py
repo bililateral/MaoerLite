@@ -19,6 +19,8 @@ class Settings:
     base_url: str = DEFAULT_BASE_URL
     model: str = DEFAULT_MODEL
     host: str = '127.0.0.1'
+    agent_thinking: bool = False
+    reasoning_effort: str = 'high'
 
     @property
     def endpoint(self):
@@ -42,6 +44,10 @@ def load_settings(path: Path = ROOT / '.local/agent.env') -> Settings:
         raise ValueError('Model API key is missing or invalid')
     base_url = values.get('AGENT_BASE_URL', DEFAULT_BASE_URL).rstrip('/')
     model = values.get('AGENT_MODEL', DEFAULT_MODEL)
+    thinking = values.get('AGENT_THINKING', 'disabled')
+    effort = values.get('AGENT_REASONING_EFFORT', 'high')
+    if thinking not in ('enabled', 'disabled') or effort not in ('low', 'high', 'max'):
+        raise ValueError('Invalid Agent thinking configuration')
     parsed = urlsplit(base_url)
     if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ValueError('Invalid model service base URL')
@@ -65,4 +71,5 @@ def load_settings(path: Path = ROOT / '.local/agent.env') -> Settings:
     token = token_path.read_text(encoding='utf-8').strip()
     if len(token) < 32 or not token.isascii() or any(c.isspace() for c in token):
         raise ValueError('Invalid local access token file')
-    return Settings(api_key=key, access_token=token, port=port, base_url=base_url, model=model, host=host)
+    return Settings(api_key=key, access_token=token, port=port, base_url=base_url, model=model, host=host,
+                    agent_thinking=thinking == 'enabled', reasoning_effort=effort)

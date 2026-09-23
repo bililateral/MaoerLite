@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 import sqlite3
 import time
+from dataclasses import replace
 from typing import TypedDict
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -231,7 +232,7 @@ class AgentTasks:
                               summary_pending=len(pending))
             ids, records = batch(pending)
             try:
-                message = await asyncio.wait_for(self.model(self.app, self.settings,
+                message = await asyncio.wait_for(self.model(self.app, replace(self.settings, agent_thinking=False),
                     summary_messages(saved['data'], records), [], discard), SUMMARY_TIMEOUT)
                 data = parse_summary(message)
             except (ModelFailure, ValueError, asyncio.TimeoutError) as exc:

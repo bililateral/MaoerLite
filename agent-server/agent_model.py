@@ -3,7 +3,7 @@ import asyncio
 import json
 import time
 import httpx
-from pydantic import Field
+from pydantic import Field, model_validator
 from protocol import ChatRequest, Message
 from rate_limit import Throttle, upstream_failure_code
 
@@ -14,18 +14,40 @@ class ModelFailure(Exception):
         super().__init__(code)
 
 
+class AgentMessage(Message):
+    # Kept only in server checkpoints/history; never streamed to the device.
+    reasoning_content: str | None = Field(default=None, max_length=64000, repr=False)
+
+    @model_validator(mode='after')
+    def reasoning_role(self):
+        if self.reasoning_content is not None and self.role != 'assistant':
+            raise ValueError('Only assistant messages can contain reasoning')
+        return self
+
+
 class AgentChatRequest(ChatRequest):
     # 24 sequential tool rounds plus bounded history and the final answer.
-    messages: list[Message] = Field(min_length=1, max_length=160)
-    max_tokens: int = Field(default=4096, ge=1, le=4096)
+    messages: list[AgentMessage] = Field(min_length=1, max_length=160)
+    max_tokens: int = Field(default=4096, ge=1, le=8192)
 
 
 async def generate(app, settings, messages, tools, publish):
     from app import limited_upstream, sse_data, TOTAL_TIMEOUT
     payload = AgentChatRequest.model_validate({'messages': messages, 'tools': tools or None,
                                               'tool_choice': 'auto' if tools else None,
-                                              'stream': True, 'max_tokens': 4096})
+                                              'stream': True, 'max_tokens': 8192 if settings.agent_thinking else 4096})
     body = payload.upstream_body(settings)
+    if settings.agent_thinking:
+        body['thinking'] = {'type': 'enabled'}
+        body['reasoning_effort'] = settings.reasoning_effort
+        body.pop('tool_choice', None)
+        for message in body['messages']:
+            if message['role'] == 'assistant':
+                message.setdefault('reasoning_content', '')
+                message['content'] = message.get('content') or ''
+    else:
+        for message in body['messages']:
+            message.pop('reasoning_content', None)
     gate = app.state.gate
     refusal = gate.enter()
     if isinstance(refusal, Throttle):
@@ -34,10 +56,10 @@ async def generate(app, settings, messages, tools, publish):
         raise ModelFailure(refusal[0], True, refusal[1])
     response = None
     started = time.monotonic()
-    text, calls = '', {}
+    text, reasoning, calls = '', '', {}
     try:
         async def read():
-            nonlocal response, text
+            nonlocal response, text, reasoning
             request = app.state.client.build_request('POST', settings.endpoint,
                 headers={'Authorization': 'Bearer ' + settings.api_key}, json=body)
             response = await app.state.client.send(request, stream=True)
@@ -61,6 +83,8 @@ async def generate(app, settings, messages, tools, publish):
                         raise ModelFailure('incomplete_model_response')
                     gate.limiter.reset()
                     result = {'role': 'assistant', 'content': text or None}
+                    if settings.agent_thinking:
+                        result['reasoning_content'] = reasoning
                     if calls:
                         result['tool_calls'] = [calls[k] for k in sorted(calls)]
                     return result
@@ -70,6 +94,9 @@ async def generate(app, settings, messages, tools, publish):
                         continue
                     finish = choice.get('finish_reason') or finish
                     delta = choice.get('delta', {})
+                    reasoning += delta.get('reasoning_content') or ''
+                    if len(reasoning) > 64000:
+                        raise ModelFailure('model_response_too_large')
                     text += delta.get('content') or ''
                     if len(text) > 16000:
                         raise ModelFailure('model_response_too_large')

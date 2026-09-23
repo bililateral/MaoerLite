@@ -2,9 +2,10 @@
 from copy import deepcopy
 import json
 
-MAX_TURNS = 6
-MAX_HISTORY_MESSAGES = 24  # Reserve room in the 40-message protocol for this task.
-MAX_HISTORY_CHARS = 12000
+MAX_TURNS = 20
+MAX_HISTORY_MESSAGES = 80  # Separate from the current task's tool budget.
+MAX_HISTORY_CHARS = 48000
+REFERENCE_TURNS = 6  # Expanding prose history must not extend stale ID lifetimes.
 MAX_REFERENCE_GROUPS = 4
 MAX_MEMORY_CHARS = 8000
 
@@ -32,8 +33,8 @@ def bounded(memory):
     value = deepcopy(memory)
     turn = value.get('turn', 0)
     value['groups'] = [g for g in value.get('groups', [])
-                       if turn - g['turn'] <= MAX_TURNS][-MAX_REFERENCE_GROUPS:]
-    if value.get('last_played') and turn - value['last_played']['turn'] > MAX_TURNS:
+                       if turn - g['turn'] <= REFERENCE_TURNS][-MAX_REFERENCE_GROUPS:]
+    if value.get('last_played') and turn - value['last_played']['turn'] > REFERENCE_TURNS:
         value.pop('last_played')
     # Drop whole candidate groups: cutting items would change ordinal meaning.
     while len(encoded(value)) > MAX_MEMORY_CHARS and value['groups']:
@@ -79,8 +80,8 @@ def remember(memory, run_id, calls, results):
             continue
         source = {'run_id': run_id, 'call_id': call['id']}
         name, args = call['name'], call['arguments']
-        if name in ('search_catalog', 'list_episodes'):
-            kind = 'podcast' if name == 'search_catalog' else 'episode'
+        if name in ('search_catalog', 'list_episodes', 'get_podcast_details', 'search_podcast_content'):
+            kind = 'podcast' if name in ('search_catalog', 'get_podcast_details') else 'episode'
             raw = result.get('items')
             if not isinstance(raw, list) or not raw or len(raw) > 8:
                 continue
@@ -88,12 +89,12 @@ def remember(memory, run_id, calls, results):
             # Reject a malformed group, never silently renumber its candidates.
             if any(item is None for item in items):
                 continue
-            if kind == 'episode' and any(item['podcast_id'] != args['podcast_id'] for item in items):
+            if kind == 'episode' and args.get('podcast_id') and any(item['podcast_id'] != args['podcast_id'] for item in items):
                 continue
             group = {'source': source, 'turn': value['turn'], 'tool': name,
-                     'query': args.get('query', ''), 'items': items}
+                     'query': args.get('query') or ' '.join(args.get('keywords', [])), 'items': items}
             if kind == 'episode':
-                group['podcast_id'] = args['podcast_id']
+                group['podcast_id'] = args.get('podcast_id', '')
             value['groups'] = [g for g in value['groups'] if g['source'] != source] + [group]
         elif name == 'play_episode' and result.get('playing') is True and result.get('episode_id') == args['episode_id']:
             item = next((i for i in references(value) if i['kind'] == 'episode'
@@ -129,19 +130,21 @@ def context(completed):
         if 'turn' in latest.get('memory', {}):
             memory = deepcopy(latest['memory'])
         else:
-            for run in completed[-MAX_TURNS:]:
+            for run in completed[-REFERENCE_TURNS:]:
                 memory['turn'] += 1
                 memory = replay_references(memory, run['id'], last_turn(run['history']))
     memory['turn'] += 1
     memory = bounded(memory)
-    history = []
+    history, retained = [], 0
     for run in reversed(completed[-MAX_TURNS:]):
         group = last_turn(run['history'])
         candidate = group + history
         if len(candidate) > MAX_HISTORY_MESSAGES or len(encoded(candidate)) > MAX_HISTORY_CHARS:
             break
         history = candidate
-    return history, memory
+        retained += 1
+    # Whole evicted tasks are summarized; never split calls from their receipts.
+    return history, memory, completed[:len(completed) - retained]
 
 
 def model_messages(messages, memory):

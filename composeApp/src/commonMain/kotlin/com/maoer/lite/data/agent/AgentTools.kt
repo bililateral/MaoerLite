@@ -15,6 +15,12 @@ class AgentTools(private val repository: PodcastRepository, private val player: 
     private val search = PodcastSearchIndex(repository.sources)
     private val knowledge = PodcastKnowledge(repository)
     private fun state(status: String = "ok", note: String = "") = buildJsonObject {
+        val selectedId = player.playbackAudioId.value
+        // Metadata must belong to the actual selected item, including while paused.
+        // During a queue transition the UI's currentAudio can briefly lag Media3.
+        val selected = player.currentAudio.value?.takeIf { it.id == selectedId }
+            ?: player.queue.value.firstOrNull { it.id == selectedId }
+        val source = repository.sources.firstOrNull { it.id == selected?.podcastId }
         put("status", status); put("note", note)
         put("playing", player.isPlaying.value); put("buffering", player.buffering.value)
         put("playback_state", when {
@@ -23,20 +29,26 @@ class AgentTools(private val repository: PodcastRepository, private val player: 
             player.playbackAudioId.value != null -> "paused"
             else -> "idle"
         })
-        put("episode_id", player.playbackAudioId.value.orEmpty())
-        put("title", player.currentAudio.value?.title.orEmpty())
+        put("episode_id", selectedId.orEmpty())
+        put("title", selected?.title.orEmpty().take(300))
+        put("podcast_id", source?.id.orEmpty())
+        put("podcast_title", source?.title.orEmpty())
+        put("selection_identity_available", source != null && selected != null)
         put("position_ms", player.positionMs.value); put("duration_ms", player.durationMs.value)
         put("playback_speed", player.playbackSpeed.value)
         put("queue_size", player.queue.value.size)
-        put("queue_index", player.queue.value.indexOfFirst { it.id == player.currentAudio.value?.id })
+        put("queue_index", player.queue.value.indexOfFirst { it.id == selectedId })
+        put("queue_position", player.queue.value.indexOfFirst { it.id == selectedId } + 1)
+        put("queue_scope", "当前播放器队列，可能经过筛选或排序；不能据此推断RSS总集数，两者数值可能相等也可能不同；队列位置不是标题期号。queue_position从1开始，0表示未在队列中找到。")
         put("sleep_remaining_ms", player.sleepTimer.value.remainingMs)
         put("sleep_end_of_episode", player.sleepTimer.value.endOfEpisode)
         put("playback_error", player.playbackError.value.orEmpty())
-        val source = repository.sources.firstOrNull { it.id == player.currentAudio.value?.podcastId }
         put("download_available", source?.let { JsonPrimitive(it.downloadAllowed) } ?: JsonNull)
         put("download_available_sources", repository.sources.count { it.downloadAllowed })
     }
-    private fun error(note: String) = buildJsonObject { put("status", "error"); put("note", note) }
+    private fun error(note: String, reason: String = "tool_unavailable") = buildJsonObject {
+        put("status", "error"); put("reason", reason); put("note", note)
+    }
     suspend fun execute(run: String, call: AgentCall): AgentReceipt {
         val key = "$run:${call.id}".encodeUtf8().sha256().hex()
         val fingerprint = "${call.name}:${call.arguments}".encodeUtf8().sha256().hex()
@@ -60,7 +72,12 @@ class AgentTools(private val repository: PodcastRepository, private val player: 
             }
             throw cancelled
         } catch (_: Exception) {
-            result = error("工具未完成，请检查网络、节目来源或实际播放状态。")
+            result = if (call.name in setOf("list_episodes", "get_podcast_details", "search_podcast_content"))
+                error("RSS资料读取或解析未完成，不表示节目不存在或分集越界；请稍后重查。", "rss_load_failed")
+            else if (call.name == "search_catalog") error("节目目录查询未完成，请核对查询条件。", "catalog_query_failed")
+            else state("unknown", "本次操作未能确认完成；以下为实际播放器状态，不要重复执行控制操作。").let { snapshot ->
+                buildJsonObject { snapshot.forEach { (key, value) -> put(key, value) }; put("reason", "operation_unconfirmed") }
+            }
         }
         storage.saveExecution(key, AgentExecution(fingerprint, result))
         return AgentReceipt(call.id, result)
@@ -84,6 +101,8 @@ class AgentTools(private val repository: PodcastRepository, private val player: 
                 val matches = search.search(query)
                 buildJsonObject {
                     put("status", "ok"); put("total", matches.size)
+                    put("returned", minOf(matches.size, 8)); put("omitted", (matches.size - 8).coerceAtLeast(0))
+                    put("has_more", matches.size > 8)
                     put("query", query); put("search_scope", "内置节目名称、分类及其拼音索引，不搜索RSS正文")
                     if (repository.sources.any { it.category == query.trim() }) {
                         put("exact_category", query.trim())

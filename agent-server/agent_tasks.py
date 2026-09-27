@@ -19,7 +19,7 @@ from langchain_core.runnables.config import set_config_context
 
 from agent_model import ModelFailure, generate
 from agent_tools import SYSTEM, definitions, validated_calls
-from agent_memory import context, last_turn, model_messages, references, remember, replay_references
+from agent_memory import context, last_turn, model_messages, references, remember, replay_references, PLAYBACK_SNAPSHOT_TOOLS
 from agent_summary import (MAX_BATCHES, SUMMARY_TIMEOUT, batch, parse_summary,
                            summary_messages, with_summary)
 
@@ -45,6 +45,31 @@ class State(TypedDict):
 
 class TaskConflict(Exception):
     pass
+
+
+def selection_identity_refresh(messages, calls, known, run_id):
+    """Upgrade a legacy state receipt before using its missing podcast identity.
+
+    No ID is inferred from an episode string. Re-read once, then let the model
+    plan again from the real device result; never repeat an already executed control.
+    """
+    missing = any(c['arguments'].get('podcast_id') and not any(
+        (i.get('kind') == 'podcast' and i.get('id') == c['arguments']['podcast_id']) or
+        (i.get('kind') == 'episode' and i.get('podcast_id') == c['arguments']['podcast_id'])
+        for i in known) for c in calls)
+    if not missing:
+        return None
+    names, latest = {}, None
+    call_id = 'selection_identity_' + run_id
+    for m in last_turn(messages):
+        for c in m.get('tool_calls') or []:
+            names[c['id']] = c['function']['name']
+        if m['role'] == 'tool' and names.get(m['tool_call_id']) in PLAYBACK_SNAPSHOT_TOOLS:
+            latest = json.loads(m['content'])
+    if (call_id in names or not latest or latest.get('status') != 'ok'
+            or not latest.get('episode_id') or 'podcast_id' in latest):
+        return None
+    return {'id': call_id, 'name': 'get_playback_state', 'arguments': {}}
 
 
 def playback_preflight(messages, calls, run_id, round_number):
@@ -254,6 +279,17 @@ class AgentTasks:
         final_only = state.get('final_only', False) or state.get('tool_count', 0) >= MAX_TOOL_CALLS
         messages = model_messages(state['messages'], state.get('memory', {}))
         messages = with_summary(messages, state.get('summary', {}), state.get('summary_pending', 0) > 0)
+        messages = [*messages]
+        messages[0] = {**messages[0], 'content': messages[0]['content'] +
+            '\n当前服务发送给API的model标识是' + json.dumps(self.settings.model, ensure_ascii=False) +
+            '。这是部署配置事实，点播助手是应用角色，两者不矛盾。用户询问模型时如实区分配置名称与供应商实际后端；不能仅因自己的应用角色就否认此模型配置，也不能凭配置独立认证中转站底层模型身份。'}
+        # Explicit per-turn evidence prevents old device snapshots being mistaken
+        # for a fresh read. This is instruction context, never a canned user reply.
+        current = last_turn(state['messages'])
+        if not any(m.get('role') == 'tool' for m in current):
+            messages = [*messages]
+            messages[0] = {**messages[0], 'content': messages[0]['content'] +
+                '\n本轮尚未执行任何手机工具。历史状态不是本轮核对结果；用户要求“再次核对/再查一次”且上下文指向播放器时，必须先get_playback_state，不能直接说已核对，即使只要一句话也必须查询。'}
         if final_only:
             messages = [*messages]
             messages[0] = {**messages[0], 'content': messages[0]['content'] +
@@ -286,6 +322,12 @@ class AgentTasks:
                     result = json.loads(previous['content'])
                     if result.get('status') == 'ok':
                         known.extend(result.get('items', []))
+            refresh_identity = selection_identity_refresh(state['messages'], calls, known, run_id)
+            if refresh_identity:
+                calls = [refresh_identity]
+                message = {'role': 'assistant', 'content': None, 'tool_calls': [{
+                    'id': refresh_identity['id'], 'type': 'function',
+                    'function': {'name': 'get_playback_state', 'arguments': '{}'}}]}
             for call in calls:
                 args = call['arguments']
                 if (call['name'] in ('list_episodes', 'get_podcast_details') or

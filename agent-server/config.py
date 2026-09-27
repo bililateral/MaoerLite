@@ -21,6 +21,8 @@ class Settings:
     host: str = '127.0.0.1'
     agent_thinking: bool = False
     reasoning_effort: str = 'high'
+    # Optional operator quota, independent of upstream 429 cooldowns. 0 disables it.
+    model_requests_per_minute: int = 0
 
     @property
     def endpoint(self):
@@ -54,6 +56,9 @@ def load_settings(path: Path = ROOT / '.local/agent.env') -> Settings:
     if not model or len(model) > 128 or not model.isascii() or any(c.isspace() for c in model):
         raise ValueError('Invalid model name')
     port = int(values.get('AGENT_PORT', '8787'))
+    model_rpm = int(values.get('AGENT_MODEL_RPM', '0'))
+    if not 0 <= model_rpm <= 10000:
+        raise ValueError('Invalid AGENT_MODEL_RPM')
     if not 1024 <= port <= 65535:
         raise ValueError('Invalid AGENT_PORT')
     host = values.get('AGENT_HOST', '127.0.0.1')
@@ -72,4 +77,5 @@ def load_settings(path: Path = ROOT / '.local/agent.env') -> Settings:
     if len(token) < 32 or not token.isascii() or any(c.isspace() for c in token):
         raise ValueError('Invalid local access token file')
     return Settings(api_key=key, access_token=token, port=port, base_url=base_url, model=model, host=host,
-                    agent_thinking=thinking == 'enabled', reasoning_effort=effort)
+                    agent_thinking=thinking == 'enabled', reasoning_effort=effort,
+                    model_requests_per_minute=model_rpm)

@@ -33,7 +33,8 @@ def error(status, code, request_id, retry_after=None, **details):
 
 class Gate:
     """One process, one event loop; no awaits inside state transitions."""
-    def __init__(self):
+    def __init__(self, requests_per_minute=0):
+        self.requests_per_minute = requests_per_minute
         self.active = False
         self.times = deque()
         self.limiter = RateLimitPolicy()
@@ -47,9 +48,10 @@ class Gate:
         cooldown = self.limiter.pending()
         if cooldown:
             return cooldown
-        if len(self.times) >= 6:
+        if self.requests_per_minute and len(self.times) >= self.requests_per_minute:
             return 'local_rate_limit', max(1, int(61 - (now - self.times[0])))
-        self.times.append(now)
+        if self.requests_per_minute:
+            self.times.append(now)
         self.active = True
         return None
 
@@ -151,7 +153,7 @@ def create_app(settings: Settings, transport=None, agent_db=None):
                 yield
 
     app = FastAPI(title='Maoer Local Agent', docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
-    gate = Gate()
+    gate = Gate(settings.model_requests_per_minute)
     app.state.gate = gate
     from agent_routes import register
     register(app, settings)

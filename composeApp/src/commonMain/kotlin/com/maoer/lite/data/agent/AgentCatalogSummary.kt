@@ -18,22 +18,23 @@ internal fun agentCatalogSummary(feed: PodcastFeed): JsonObject {
         ranges += if (start == end) "$start" else "$start–$end"
         index++
     }
-    val unnumbered = feed.episodes.filter { agentEpisodeNumber(it.title) == null }
+    val unrecognized = feed.episodes.filter { agentEpisodeNumber(it.title) == null }
     val duplicates = counts.filterValues { it > 1 }
     return buildJsonObject {
         put("available_items", feed.episodes.size)
         put("scope", "当前可播放RSS目录全表；标题开头编号按规则识别，不代表完整发布历史或作者正式编号体系。")
+        put("title_number_scope", AGENT_TITLE_NUMBER_SCOPE)
         put("numbered_items", numbered.size); put("unique_title_numbers", counts.size)
         put("min_title_number", counts.keys.minOrNull()?.let { JsonPrimitive(it) } ?: JsonNull)
         put("max_title_number", maximum?.let { JsonPrimitive(it) } ?: JsonNull)
-        put("unnumbered_items", unnumbered.size)
+        put("unrecognized_title_number_items", unrecognized.size)
         put("repeated_number_items", numbered.size - counts.size)
         put("missing_numbers_assumption", "仅按1到当前最高识别编号核对未出现的数字；不代表这些期曾发布、删除或收费。")
         put("missing_number_count", missing.size)
         putJsonArray("missing_number_ranges") { ranges.take(40).forEach { add(it) } }
         put("missing_ranges_truncated", ranges.size > 40)
-        putJsonArray("unnumbered_examples") { unnumbered.take(6).forEach { add(it.title.take(200)) } }
-        put("unnumbered_examples_truncated", unnumbered.size > 6)
+        putJsonArray("unrecognized_title_number_examples") { unrecognized.take(6).forEach { add(it.title.take(200)) } }
+        put("unrecognized_examples_truncated", unrecognized.size > 6)
         putJsonArray("duplicate_number_examples") { duplicates.entries.sortedBy { it.key }.take(8).forEach {
             add(buildJsonObject { put("number", it.key); put("count", it.value) })
         } }

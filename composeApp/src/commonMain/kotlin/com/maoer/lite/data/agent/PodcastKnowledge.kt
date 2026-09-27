@@ -29,6 +29,8 @@ class PodcastKnowledge(private val repository: PodcastRepository) {
         }
         return buildJsonObject {
             put("status", "ok")
+            put("description_scope", "podcast_description_excerpt_not_episode_descriptions")
+            put("episode_full_description_available", false)
             put("note", if (loaded.fresh) "依据来自本次核对的 RSS 节目简介。" else "刷新失败，依据来自缓存；更新时间未知。")
             putJsonArray("items") { add(buildJsonObject {
                 put("kind", "podcast"); put("id", id); put("title", feed.title.take(300))
@@ -68,9 +70,18 @@ class PodcastKnowledge(private val repository: PodcastRepository) {
             put("coverage_available", loaded.count { it.feed != null })
             put("coverage_fresh", loaded.count { it.fresh })
             put("total_matches", searched.sumOf { it.second })
+            put("returned_matches", hits.take(4).size)
+            put("omitted_matches", searched.sumOf { it.second } - hits.take(4).size)
+            putJsonArray("searched_keywords") { terms.forEach { add(it) } }
+            put("match_operator", "ALL_keywords_in_same_episode")
+            put("negative_claim_supported", false)
+            put("search_scope", "available_rss_episode_titles_and_descriptions_literal_all_keywords")
+            put("evidence_scope", "at_most_4_matching_episodes_description_excerpts_up_to_900_chars_each")
+            put("episode_full_description_available", false)
+            put("audio_analyzed", false)
             put("note", "已检索 ${loaded.count { it.feed != null }}/${sources.size} 个节目的可用 RSS 分集，" +
                 "其中 ${loaded.count { it.fresh }} 个本次更新核对成功。" +
-                if (hits.isEmpty()) "未找到同时包含这些关键词的资料；不代表整个节目或音频中没有涉及。" else "依据为 RSS 文案，未分析音频。")
+                if (hits.isEmpty()) "未找到在同一条标题和简介中同时包含全部关键词【${terms.joinToString("、")}】的资料；不能据此说其中任何单个词不存在，更不能证明没有广告或音频没涉及。" else "仅展示最多4条命中文案的节选，未分析音频；不能用这些片段断言全部RSS没有某种标注。")
             putJsonArray("items") {
                 hits.take(4).forEach { hit ->
                     val item = bySource.getValue(hit.document.podcastId)

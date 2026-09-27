@@ -125,7 +125,7 @@ object AgentScreen : Screen {
                         }
                         val run = turn.run
                         if (!run?.text.isNullOrBlank()) Surface(color = Color.White, shape = RoundedCornerShape(18.dp), modifier = Modifier.padding(top = 10.dp)) {
-                            Text(run!!.text, Modifier.padding(14.dp), lineHeight = 24.sp)
+                            AgentReply(run!!.text, Modifier.fillMaxWidth().padding(14.dp))
                         }
                         run?.results?.forEach { receipt ->
                             val cards = receipt.result["items"] as? JsonArray

@@ -12,6 +12,7 @@ kotlin = "2.0.0"
 datastore = "1.1.1"
 media3 = "1.4.0"
 jsch = "2.28.6"
+markdown = "0.24.0"
 
 # KMP 核心库版本
 ktor = "2.3.12"
@@ -22,6 +23,7 @@ coil3 = "3.0.4"
 coroutines = "1.9.0-RC"
 
 [libraries]
+markdown-m3 = { module = "com.mikepenz:multiplatform-markdown-renderer-m3", version.ref = "markdown" }
 ssh-jsch = { module = "com.github.mwiede:jsch", version.ref = "jsch" }
 # Android 基础
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activityCompose" }

@@ -40,6 +40,7 @@ kotlin {
             implementation(compose.components.resources)
             implementation(compose.components.uiToolingPreview)
             implementation(compose.materialIconsExtended)
+            implementation(libs.markdown.m3)
             implementation(libs.androidx.datastore.preferences.core)
 
             // 协程

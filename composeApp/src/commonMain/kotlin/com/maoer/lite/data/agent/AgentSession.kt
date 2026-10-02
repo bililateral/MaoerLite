@@ -112,7 +112,7 @@ class AgentSession(private val storage: AgentStorage, private val api: AgentApi,
                 // Recheck server status before any dispatch. Claim is the execution boundary.
                 run = api.get(run.id)
                 if (run.status != "awaiting_tools") continue
-                val receipts = run.calls.map { call -> tools.execute(run.id, call) }
+                val receipts = run.calls.map { call -> tools.execute(run.id, call, run.conversation_id) }
                 currentCoroutineContext().ensureActive()
                 run = api.results(run.id, receipts)
             } else {
@@ -147,6 +147,7 @@ class AgentSession(private val storage: AgentStorage, private val api: AgentApi,
     }
     private suspend fun finishNewConversation(old: AgentHistory) {
         api.deleteConversation(old.conversationId)
+        storage.clearExecutions(old.conversationId)
         // If the response or this local write fails, keep the durable deletion
         // intent. Reconnect repeats DELETE rather than recreating an old run.
         save(AgentHistory(starterQuestions = agentStarterQuestions(old.starterQuestions)))

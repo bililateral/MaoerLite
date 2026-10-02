@@ -49,26 +49,27 @@ class AgentTools(private val repository: PodcastRepository, private val player: 
     private fun error(note: String, reason: String = "tool_unavailable") = buildJsonObject {
         put("status", "error"); put("reason", reason); put("note", note)
     }
-    suspend fun execute(run: String, call: AgentCall): AgentReceipt {
+    suspend fun execute(run: String, call: AgentCall, conversationId: String = ""): AgentReceipt {
         val key = "$run:${call.id}".encodeUtf8().sha256().hex()
         val fingerprint = "${call.name}:${call.arguments}".encodeUtf8().sha256().hex()
         val old = storage.execution(key)
         if (old != null) {
             require(old.fingerprint == fingerprint) { "工具 ID 对应的参数发生变化" }
             val result = old.result ?: state("unknown", "上次执行中断，已查询当前状态；为避免重复操作，不重新执行。")
-            if (old.result == null) storage.saveExecution(key, AgentExecution(fingerprint, result))
+            storage.saveExecution(key, old.copy(result = result, conversationId = conversationId, runId = run))
             return AgentReceipt(call.id, result)
         }
         // Claim has no device side effect and is safe to repeat if its response
         // is lost. Do not persist an execution marker until authorization succeeds.
         api.claim(run, call.id)
-        storage.saveExecution(key, AgentExecution(fingerprint))
+        val execution = AgentExecution(fingerprint, conversationId = conversationId, runId = run)
+        storage.saveExecution(key, execution)
         var result: JsonObject
         try {
             result = withContext(Dispatchers.Main) { perform(call) }
         } catch (cancelled: CancellationException) {
             withContext(NonCancellable) {
-                storage.saveExecution(key, AgentExecution(fingerprint, state("unknown", "任务已停止，操作可能已生效；未重复执行。")))
+                storage.saveExecution(key, execution.copy(result = state("unknown", "任务已停止，操作可能已生效；未重复执行。")))
             }
             throw cancelled
         } catch (_: Exception) {
@@ -79,9 +80,10 @@ class AgentTools(private val repository: PodcastRepository, private val player: 
                 buildJsonObject { snapshot.forEach { (key, value) -> put(key, value) }; put("reason", "operation_unconfirmed") }
             }
         }
-        storage.saveExecution(key, AgentExecution(fingerprint, result))
+        storage.saveExecution(key, execution.copy(result = result))
         return AgentReceipt(call.id, result)
     }
+
     private suspend fun perform(call: AgentCall): JsonObject {
         val args = call.arguments
         return when (call.name) {

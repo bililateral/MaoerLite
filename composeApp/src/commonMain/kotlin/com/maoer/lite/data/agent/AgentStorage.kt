@@ -40,4 +40,17 @@ class AgentStorage {
     suspend fun saveHistory(value: AgentHistory) = write("history.json", json.encodeToString(value))
     suspend fun execution(key: String) = read("execution-$key.json")?.let { json.decodeFromString<AgentExecution>(it) }
     suspend fun saveExecution(key: String, value: AgentExecution) = write("execution-$key.json", json.encodeToString(value))
+
+    /** Called only after remote deletion acknowledgement, before replacing history. */
+    suspend fun clearExecutions(conversationId: String) = withContext(Dispatchers.Default) {
+        lock.withLock {
+            if (!fs.exists(root)) return@withLock
+            fs.list(root).filter { Regex("execution-[a-f0-9]{64}\\.json").matches(it.name) }.forEach { path ->
+                val value = json.decodeFromString<AgentExecution>(fs.read(path) { readUtf8() })
+                // Legacy receipts predate ownership; this app has only one live conversation.
+                // They belong to this or already closed conversations, never a future task.
+                if (value.conversationId.isEmpty() || value.conversationId == conversationId) fs.delete(path)
+            }
+        }
+    }
 }

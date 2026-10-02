@@ -87,7 +87,8 @@ fun AgentHistory.requireRecoverableConnection(remote: AgentRun?) {
 @Serializable data class AgentNewRun(val id: String, val conversation_id: String, val message: String,
                                    val capabilities: List<String> = emptyList())
 @Serializable data class AgentResults(val results: List<AgentReceipt>)
-@Serializable data class AgentExecution(val fingerprint: String, val result: JsonObject? = null)
+@Serializable data class AgentExecution(val fingerprint: String, val result: JsonObject? = null,
+                                       val conversationId: String = "", val runId: String = "")
 
 fun agentId(): String {
     val hex = List(32) { "0123456789abcdef"[Random.nextInt(16)] }.joinToString("")

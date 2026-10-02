@@ -84,6 +84,19 @@ class AgentTools(private val repository: PodcastRepository, private val player: 
         return AgentReceipt(call.id, result)
     }
 
+    /** Recover only already claimed, locally recorded effects; never execute a tool. */
+    suspend fun unsubmittedReceipts(run: AgentRun): List<AgentReceipt> {
+        val submitted = run.results.map { it.call_id }.toSet()
+        return run.claimed.filterNot { it in submitted }.mapNotNull { id ->
+            val key = "${run.id}:$id".encodeUtf8().sha256().hex()
+            val old = storage.execution(key) ?: return@mapNotNull null
+            val result = old.result ?: withContext(Dispatchers.Main) {
+                state("unknown", "操作执行中断，以下为当前状态；未重复执行原操作。")
+            }
+            if (old.result == null) storage.saveExecution(key, old.copy(result = result))
+            AgentReceipt(id, result)
+        }
+    }
     private suspend fun perform(call: AgentCall): JsonObject {
         val args = call.arguments
         return when (call.name) {

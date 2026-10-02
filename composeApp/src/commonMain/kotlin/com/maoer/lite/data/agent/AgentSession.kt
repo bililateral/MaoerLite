@@ -89,7 +89,16 @@ class AgentSession(private val storage: AgentStorage, private val api: AgentApi,
         val h = mutable.value.history
         if (h.deletePending) { finishNewConversation(h); return@work }
         if (h.cancelPending != null) {
-            try { update(api.cancel(h.cancelPending)) }
+            try {
+                var cancelled = api.cancel(h.cancelPending)
+                update(cancelled)
+                if (cancelled.status == "cancelled") {
+                    for (receipt in tools.unsubmittedReceipts(cancelled)) {
+                        cancelled = api.results(cancelled.id, listOf(receipt))
+                        update(cancelled)
+                    }
+                }
+            }
             catch (e: AgentApiException) {
                 if (e.status != 404) throw e
                 update(AgentRun(h.cancelPending, h.conversationId, "cancelled"))

@@ -110,14 +110,17 @@ class MaoerPlaybackService : MediaLibraryService() {
                 }
             }
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                // Read the destination before queuing any restarted/zero-position write.
+                // A single-item automatic repeat has just ended that same episode: restart it.
+                val resumesDestination = reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK ||
+                    reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO
+                val resumePosition = if (resumesDestination &&
+                    (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO || player.currentPosition == 0L))
+                    ListeningPolicy.resumePosition(library.entries.value.find { it.audio.id == mediaItem?.mediaId }) else 0L
+                if (resumePosition > 0) player.seekTo(resumePosition)
                 if (mediaItem != null && reason != Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED) {
                     progressWrites.trySend(ProgressWrite(mediaItem.asAudio(), player.currentPosition.coerceAtLeast(0),
                         0, System.currentTimeMillis(), false, restarted = true))
-                }
-                // Notification/lockscreen manual skips also resume the destination episode.
-                if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK && player.currentPosition == 0L) {
-                    val position = ListeningPolicy.resumePosition(library.entries.value.find { it.audio.id == mediaItem?.mediaId })
-                    if (position > 0) player.seekTo(position)
                 }
             }
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {

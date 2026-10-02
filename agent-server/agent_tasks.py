@@ -41,6 +41,7 @@ class State(TypedDict):
     summary: dict
     summary_pending: int
     extended_episodes: bool
+    deferred_results: list[dict]
 
 
 class TaskConflict(Exception):
@@ -101,8 +102,10 @@ def episode_selection_question(messages, calls):
     starts = [i for i, message in enumerate(messages) if message['role'] == 'user']
     previous = last_turn(messages[:starts[-1]]) if starts else []
     prior_queries, shown = {}, set()
-    prior_play = any(c['function']['name'] == 'play_episode'
-                     for m in previous for c in m.get('tool_calls', []))
+    prior_play_ids = {c['id'] for m in previous for c in m.get('tool_calls', [])
+                      if c['function']['name'] == 'play_episode'}
+    prior_play = any(m['role'] == 'tool' and m.get('tool_call_id') in prior_play_ids
+                     and json.loads(m['content']).get('playing') is True for m in previous)
     if not prior_play:
         for message in previous:
             for call in message.get('tool_calls', []):
@@ -147,19 +150,16 @@ def episode_selection_question(messages, calls):
         if numbered_item and (args['podcast_id'], numbered_item[0]) in missing_positions:
             number, title = numbered_item
             order = missing_positions[(args['podcast_id'], number)]
-            order_name = {'source': '原始列表', 'reverse_source': '原始列表从末尾往前数', 'newest': '从新到旧列表'}[order]
-            return f'{order_name}没有第{number}条，但找到了标题期号为{number}的《{title}》。你是想播放这期吗？目前没有开始新的播放。'
+            return {'reason': 'position_missing_title_number_found', 'number': number, 'order': order, 'title': title}
         alternative = alternatives.get((args['podcast_id'], args['episode_id']))
         if alternative and (args['podcast_id'], alternative[0]) in missing_numbers:
             position, order, title = alternative
-            order_name = {'source': '原始列表', 'reverse_source': '原始列表从末尾往前数', 'newest': '从新到旧列表'}[order]
-            return f'没有找到标题期号为{position}的分集。{order_name}第{position}条是《{title}》。你是想播放这条吗？目前没有开始新的播放。'
+            return {'reason': 'title_number_missing_position_found', 'position': position, 'order': order, 'title': title}
         selected = positioned.get((args['podcast_id'], args['episode_id']))
         if selected:
             position, order, title = selected
             if (args['podcast_id'], position, order, args['episode_id']) not in shown:
-                order_name = {'source': '原始列表', 'reverse_source': '原始列表从末尾往前数', 'newest': '从新到旧列表'}[order]
-                return f'{order_name}第{position}条是《{title}》。确认播放这一条吗？目前没有开始新的播放。'
+                return {'reason': 'position_requires_confirmation', 'position': position, 'order': order, 'title': title}
     return None
 
 
@@ -343,11 +343,8 @@ class AgentTasks:
             seen = {c['id'] for m in state['messages'] for c in m.get('tool_calls', [])}
             if any(not i or i in seen for i in ids):
                 raise ModelFailure('invalid_tool_call')
-            clarification = episode_selection_question(state['messages'], calls)
-            if clarification:
-                return {'messages': state['messages'] + [{'role': 'assistant', 'content': clarification}],
-                        'rounds': state['rounds'] + 1, 'calls': [], 'tool_count': state.get('tool_count', 0)}
-            refresh = playback_preflight(state['messages'], calls, run_id, state['rounds'])
+            executable = [c for c in calls if not episode_selection_question(state['messages'], [c])]
+            refresh = playback_preflight(state['messages'], executable, run_id, state['rounds'])
             if refresh:
                 if any(call['id'] in seen for call in refresh):
                     raise ModelFailure('invalid_tool_call')
@@ -363,8 +360,23 @@ class AgentTasks:
                 {'status': 'error', 'executed': False, 'reason': 'tool_budget_exhausted'})} for c in calls]
             return {'messages': state['messages'] + [message] + skipped,
                     'rounds': state['rounds'] + 1, 'calls': [], 'final_only': True, 'tool_count': count}
-        return {'messages': state['messages'] + [message], 'rounds': state['rounds'] + 1,
-                'calls': calls, 'tool_count': count + len(calls)}
+        deferred = []
+        executable = []
+        for call in calls:
+            selection = episode_selection_question(state['messages'], [call])
+            if selection:
+                deferred.append({'call_id': call['id'], 'result': {
+                    'status': 'confirmation_required', 'executed': False,
+                    'candidate': {**call['arguments'], **selection}}})
+            else:
+                executable.append(call)
+        messages = state['messages'] + [message]
+        if not executable:
+            messages += [{'role': 'tool', 'tool_call_id': r['call_id'],
+                          'content': json.dumps(r['result'], ensure_ascii=False)} for r in deferred]
+        return {'messages': messages, 'rounds': state['rounds'] + 1,
+                'calls': executable, 'deferred_results': deferred if executable else [],
+                'tool_count': count + len(calls)}
 
     def device_node(self, state, config: RunnableConfig):
         # No side effects before interrupt: this node restarts on resume.
@@ -372,13 +384,14 @@ class AgentTasks:
         # Explicitly use the supplied public config/context for this sync node.
         with set_config_context(config) as context:
             results = context.run(interrupt, {'calls': state['calls']})
+        results = results + state.get('deferred_results', [])
         messages = state['messages'] + [{'role': 'tool', 'tool_call_id': r['call_id'],
                                        'content': json.dumps(r['result'], ensure_ascii=False)} for r in results]
         memory = state.get('memory')
         if memory is None:
             memory = replay_references({'turn': 1, 'groups': []}, state['run_id'], state['messages'])
         memory = remember(memory, state['run_id'], state['calls'], results)
-        return {'messages': messages, 'calls': [], 'memory': memory}
+        return {'messages': messages, 'calls': [], 'memory': memory, 'deferred_results': []}
 
     def launch(self, run_id, value):
         if run_id in self.jobs: raise TaskConflict('task_busy')

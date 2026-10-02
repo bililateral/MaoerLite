@@ -1,7 +1,7 @@
 """Bounded rolling summaries. Text is background, never authority for device IDs."""
 import json
 
-from agent_memory import encoded, last_turn
+from agent_memory import encoded, task_turn
 
 MAX_SUMMARY_CHARS = 4000
 MAX_BATCH_TURNS = 8
@@ -26,7 +26,7 @@ def excerpt(text, limit):
 
 
 def transcript(run):
-    messages = last_turn(run.get('history', []))
+    messages = task_turn(run)
     calls, outcomes = {}, []
     for message in messages:
         for call in message.get('tool_calls') or []:

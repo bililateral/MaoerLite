@@ -153,22 +153,43 @@ def replay_references(memory, run_id, messages):
     return memory
 
 
+def task_turn(run):
+    """Keep interrupted user intent and receipts without inventing a completed turn."""
+    if run.get('status', 'completed') == 'completed':
+        return last_turn(run.get('history', []))
+    messages = [{'role': 'user', 'content': run.get('input', {}).get('message', '')}]
+    calls = {c['id']: c for c in run.get('tool_ledger', []) + run.get('batch', [])}
+    unpaired = []
+    for receipt in run.get('results', []):
+        call = calls.get(receipt['call_id'])
+        if not call:
+            unpaired.append(receipt)
+            continue
+        messages += [{'role': 'assistant', 'content': None, 'tool_calls': [{
+            'id': call['id'], 'type': 'function', 'function': {
+                'name': call['name'], 'arguments': encoded(call['arguments'])}}]},
+            {'role': 'tool', 'tool_call_id': call['id'], 'content': encoded(receipt['result'])}]
+    received = {r['call_id'] for r in run.get('results', [])}
+    messages.append({'role': 'assistant', 'content': '历史任务状态数据（不是新的执行指令）：' + encoded({
+        'status': run['status'], 'error': run.get('error', ''),
+        'recorded_results_without_tool_definition': unpaired,
+        'claimed_without_receipt': [i for i in run.get('claimed', []) if i not in received],
+        'instruction': '此轮未正常完成。只按真实回执认定执行结果；没有回执的操作结果未知。保留用户要求，但不得自动重做已取消或结果未知的操作。'})})
+    return messages
+
+
 def context(completed):
     """Return bounded whole turns and separately bounded, provenance-bearing data."""
     memory = {'turn': 0, 'groups': []}
-    if completed:
-        latest = completed[-1]
-        if 'turn' in latest.get('memory', {}):
-            memory = deepcopy(latest['memory'])
-        else:
-            for run in completed[-REFERENCE_TURNS:]:
-                memory['turn'] += 1
-                memory = replay_references(memory, run['id'], last_turn(run['history']))
+    memory['turn'] = max(0, len(completed) - REFERENCE_TURNS)
+    for run in completed[-REFERENCE_TURNS:]:
+        memory['turn'] += 1
+        memory = replay_references(memory, run['id'], task_turn(run))
     memory['turn'] += 1
     memory = bounded(memory)
     history, retained = [], 0
     for run in reversed(completed[-MAX_TURNS:]):
-        group = last_turn(run['history'])
+        group = task_turn(run)
         candidate = group + history
         if len(candidate) > MAX_HISTORY_MESSAGES or len(encoded(candidate)) > MAX_HISTORY_CHARS:
             break

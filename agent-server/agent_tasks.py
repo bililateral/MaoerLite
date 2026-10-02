@@ -218,7 +218,7 @@ class Store:
 
     @staticmethod
     def public(run):
-        return {k: v for k, v in run.items() if k not in ('history', 'receipts', 'input', 'memory', 'batch', 'summary_error')}
+        return {k: v for k, v in run.items() if k not in ('history', 'receipts', 'input', 'memory', 'batch', 'tool_ledger', 'summary_error')}
 
 
 class AgentTasks:
@@ -394,6 +394,9 @@ class AgentTasks:
         run = self.get_run(run_id)
         by_id = {r['call_id']: r for r in run['results']}
         run['batch'] = calls
+        ledger = {c['id']: c for c in run.get('tool_ledger', [])}
+        ledger.update({c['id']: c for c in calls})
+        run['tool_ledger'] = list(ledger.values())
         for index, call in enumerate(calls):
             if call['id'] in by_id:
                 continue
@@ -451,8 +454,7 @@ class AgentTasks:
             pass
         previous = self.store.conversation(request.conversation_id)
         if any(r['status'] not in TERMINAL for r in previous): raise TaskConflict('conversation_busy')
-        completed = [r for r in previous if r['status'] == 'completed']
-        history, memory, evicted = context(completed)
+        history, memory, evicted = context(previous)
         extended = 'episode_selection_v2' in value.get('capabilities', [])
         selection_policy = ('\n本客户端支持分集分页与位置选择。用户说第N集/第一集时用position=N、order=reverse_source，从原始RSS列表末尾往前数，第一集就是原始列表最后一条；不需要日期完整，也不按发布日期重排或匹配标题编号。首次找到后展示真实标题并问一次确认，下一轮确认后使用已展示ID播放，不反复确认。越界或查询失败不自动改查标题期号；明确第N期/标题期号N才用episode_number=N。明确原始列表第N条用source，从最新数用newest；当前页面排序未知时先澄清，不声称看到了页面。只要求查询或展示时不播放，也不强行询问是否播放。'
             if extended else '\n本客户端仅支持标题查询，不支持完整列表定位或分页。用户说第N集时说明需升级或请给出具体标题，不得以返回的前8条猜测末尾位置。不要传入未定义参数。')

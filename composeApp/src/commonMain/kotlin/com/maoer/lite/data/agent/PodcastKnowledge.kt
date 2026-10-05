@@ -146,7 +146,9 @@ fun knowledgeExcerpt(text: String, keywords: List<String>, limit: Int = 900): St
     if (text.length <= limit) return text
     val lower = text.lowercase()
     val positions = keywords.mapNotNull { term -> lower.indexOf(term.lowercase()).takeIf { it >= 0 } }.distinct().sorted()
-    if (positions.isEmpty()) return text.take(limit) + "…"
+    if (positions.isEmpty()) return text.take(limit).let { excerpt ->
+        if (excerpt.isEmpty()) excerpt else excerpt.dropLast(1) + "…"
+    }
     val piece = (limit - positions.size * 6) / positions.size
     val ranges = positions.map { position ->
         val start = (position - piece / 3).coerceAtLeast(0)

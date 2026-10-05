@@ -15,18 +15,18 @@ import kotlinx.coroutines.withTimeout
 
 class AgentApiException(val code: String, val status: Int) : Exception(code)
 
-class AgentApi(private val storage: AgentStorage) {
-    private val transport = AgentTransport()
+class AgentApi(
+    private val storage: AgentStorage,
+    private val transport: AgentTransport = AgentTransport(),
+    private val client: HttpClient = agentHttpClient(),
+    private val probeFactory: () -> AgentTransport = { AgentTransport() },
+) {
     fun closeConnection() = transport.close()
     suspend fun probeSsh(ssh: AgentSshConfig) = transport.probe(ssh)
     private val json = Json { ignoreUnknownKeys = true }
-    // Separate from RSS client: an idle model can take much longer than a feed request.
-    private val client = HttpClient { install(HttpTimeout) {
-        requestTimeoutMillis = 240_000; connectTimeoutMillis = 10_000; socketTimeoutMillis = 35_000
-    } }
     /** Read-only authenticated probe. A missing run proves auth, not a failed connection. */
     suspend fun checkConnection(connection: AgentConnection, runId: String): AgentRun? {
-        val probe = AgentTransport()
+        val probe = probeFactory()
         try {
             return withTimeout(25_000) {
                 val response = client.get(probe.endpoint(connection) + "/v1/agent/runs/${runId.encodeURLPathPart()}") {
@@ -99,5 +99,12 @@ class AgentApi(private val storage: AgentStorage) {
                 if (line.startsWith("data: ")) update(json.decodeFromString<AgentRun>(line.removePrefix("data: ")))
             }
         }
+    }
+}
+
+// Separate from RSS client: an idle model can take much longer than a feed request.
+internal fun agentHttpClient() = HttpClient {
+    install(HttpTimeout) {
+        requestTimeoutMillis = 240_000; connectTimeoutMillis = 10_000; socketTimeoutMillis = 35_000
     }
 }

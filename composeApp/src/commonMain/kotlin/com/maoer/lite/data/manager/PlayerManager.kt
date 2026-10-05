@@ -8,18 +8,12 @@ import com.maoer.lite.data.podcast.PodcastRepository
 import com.maoer.lite.data.download.Downloads
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
-
-@Serializable
-data class PlaybackSnapshot(val queue: List<Audio>, val currentId: String, val positionMs: Long, val speed: Float = 1f)
 
 /** UI selects a queue; actual playing/position/error state always comes from Media3. */
 class PlayerManager(private val storage: KeyValueStorage, private val mediaController: MediaPlayerController,
     private val library: ListeningLibrary, private val podcasts: PodcastRepository, private val downloads: Downloads) {
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-    private val json = Json { ignoreUnknownKeys = true }
+    private val snapshotStore = PlaybackSnapshotStore(storage)
     private val _currentAudio = MutableStateFlow<Audio?>(null)
     val currentAudio = _currentAudio.asStateFlow()
     val isPlaying = mediaController.isPlaying
@@ -42,7 +36,7 @@ class PlayerManager(private val storage: KeyValueStorage, private val mediaContr
     init {
         scope.launch {
             optional { downloads.awaitReady() }
-            val saved = optional { storage.getString(SNAPSHOT_KEY)?.let { json.decodeFromString<PlaybackSnapshot>(it) } }
+            val saved = optional { snapshotStore.load() }
             if (!userSelected && saved != null) {
                 val audio = saved.queue.find { it.id == saved.currentId }?.let { enrich(it) }
                 if (audio != null) {
@@ -137,5 +131,5 @@ class PlayerManager(private val storage: KeyValueStorage, private val mediaContr
         require(minutes == null || minutes == -1 || minutes in 1..180)
         mediaController.setSleepTimer(minutes)
     }
-    companion object { const val SNAPSHOT_KEY = "playback_snapshot_v2" }
+    companion object { const val SNAPSHOT_KEY = PlaybackSnapshotStore.KEY }
 }

@@ -22,8 +22,8 @@ import com.maoer.lite.data.manager.PlayerManager
 import com.maoer.lite.data.model.Audio
 import com.maoer.lite.data.podcast.*
 import com.maoer.lite.ui.detail.DetailScreen
-import com.maoer.lite.ui.home.NowPlayingBar
-import com.maoer.lite.ui.home.PodcastCover
+import com.maoer.lite.ui.components.NowPlayingBar
+import com.maoer.lite.ui.components.PodcastCover
 import com.maoer.lite.ui.podcast.PodcastScreen
 import org.koin.compose.koinInject
 

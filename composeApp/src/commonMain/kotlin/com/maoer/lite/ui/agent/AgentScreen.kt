@@ -25,7 +25,7 @@ import androidx.compose.ui.unit.sp
 import cafe.adriel.voyager.core.screen.Screen
 import cafe.adriel.voyager.navigator.LocalNavigator
 import com.maoer.lite.data.agent.*
-import com.maoer.lite.ui.home.NowPlayingBar
+import com.maoer.lite.ui.components.NowPlayingBar
 import com.maoer.lite.ui.podcast.PodcastScreen
 import kotlinx.serialization.json.*
 import org.koin.compose.koinInject

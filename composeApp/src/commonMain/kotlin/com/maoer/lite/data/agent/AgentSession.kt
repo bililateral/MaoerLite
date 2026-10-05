@@ -14,6 +14,7 @@ class AgentSession(private val storage: AgentStorage, private val api: AgentApi,
     val state = mutable.asStateFlow()
     private var job: Job? = null
     private var configuring = false
+    private val connections = AgentConnectionManager(storage, api)
     init { scope.launch {
         try {
             val saved = storage.history()
@@ -31,21 +32,7 @@ class AgentSession(private val storage: AgentStorage, private val api: AgentApi,
         check(mutable.value.ready) { "本地助手记录尚未加载，请稍后重试。" }
         configuring = true
         try {
-            value.validationError()?.let { throw IllegalArgumentException(it) }
-            val url = agentServiceUrl(value.url)
-            value.ssh?.validate()
-            if (value.ssh != null) require(url.startsWith("http://")) { "SSH 隧道内请填写 http:// 开头的服务地址。" }
-            require(value.token.length >= 32 && value.token.all { it.code in 33..126 })
-            val normalized = value.copy(url = url)
-            val history = mutable.value.history
-            val turn = history.turns.lastOrNull()
-            val pending = history.deletePending || history.cancelPending != null || turn?.let { it.run?.terminal != true } == true
-            val remote = api.checkConnection(normalized, if (pending) history.cancelPending ?: turn?.id ?: agentId() else agentId())
-            history.requireRecoverableConnection(remote)
-            try { storage.saveConnection(normalized) }
-            catch (e: CancellationException) { throw e }
-            catch (_: Exception) { throw IllegalStateException("连接验证成功，但手机未能保存配置，请检查设备安全存储后重试。") }
-            withContext(NonCancellable + Dispatchers.IO) { runCatching { api.closeConnection() } }
+            val pending = connections.configure(value, mutable.value.history)
             mutable.value = mutable.value.copy(connected = true, notice = if (pending)
                 "连接已验证并保存；点击恢复连接继续原请求。" else "连接已验证并保存")
         } finally { configuring = false }

@@ -26,8 +26,8 @@ import cafe.adriel.voyager.navigator.LocalNavigator
 import com.maoer.lite.data.manager.PlayerManager
 import com.maoer.lite.data.podcast.*
 import com.maoer.lite.ui.detail.DetailScreen
-import com.maoer.lite.ui.home.NowPlayingBar
-import com.maoer.lite.ui.home.PodcastCover
+import com.maoer.lite.ui.components.NowPlayingBar
+import com.maoer.lite.ui.components.PodcastCover
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow

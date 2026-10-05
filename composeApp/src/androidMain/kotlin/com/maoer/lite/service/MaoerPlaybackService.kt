@@ -26,14 +26,13 @@ import com.maoer.lite.R
 import com.maoer.lite.data.local.KeyValueStorage
 import com.maoer.lite.data.local.getAppDataStore
 import com.maoer.lite.data.manager.PlaybackSnapshot
-import com.maoer.lite.data.manager.PlayerManager
+import com.maoer.lite.data.manager.asAudio
+import com.maoer.lite.data.manager.PlaybackSnapshotStore
 import com.maoer.lite.data.manager.SleepTimerPolicy
 import com.maoer.lite.data.manager.SleepTimerState
 import com.maoer.lite.data.model.Audio
 import com.maoer.lite.data.library.ListeningLibrary
 import com.maoer.lite.data.library.ListeningPolicy
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.Dispatchers
@@ -61,7 +60,7 @@ class MaoerPlaybackService : MediaLibraryService() {
     private val persistenceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var progressPersistence: Job? = null
     private val snapshots = Channel<PlaybackSnapshot>(Channel.CONFLATED)
-    private val storage by lazy { KeyValueStorage(getAppDataStore()) }
+    private val snapshotStore by lazy { PlaybackSnapshotStore(KeyValueStorage(getAppDataStore())) }
     private val library: ListeningLibrary by lazy { org.koin.core.context.GlobalContext.get().get() }
     private data class ProgressWrite(val audio: Audio, val position: Long, val duration: Long, val at: Long, val ended: Boolean, val restarted: Boolean = false)
     private val progressWrites = Channel<ProgressWrite>(Channel.UNLIMITED)
@@ -88,7 +87,7 @@ class MaoerPlaybackService : MediaLibraryService() {
         player.repeatMode = Player.REPEAT_MODE_ALL
         persistenceScope.launch {
             for (snapshot in snapshots) {
-                try { storage.saveString(PlayerManager.SNAPSHOT_KEY, Json.encodeToString(snapshot)) }
+                try { snapshotStore.save(snapshot) }
                 catch (cancelled: CancellationException) { throw cancelled }
                 catch (error: Exception) { android.util.Log.w("MaoerPlayback", "Snapshot persistence failed", error) }
             }
@@ -207,11 +206,6 @@ class MaoerPlaybackService : MediaLibraryService() {
                     (player.pauseAtEndOfMediaItems && player.duration > 0 && player.currentPosition >= player.duration)))
         }
     }
-
-    private fun MediaItem.asAudio() = Audio(mediaId, mediaMetadata.title?.toString().orEmpty(),
-        mediaMetadata.artist?.toString().orEmpty(), mediaMetadata.artworkUri?.toString().orEmpty(),
-        audioUrl = mediaMetadata.extras?.getString("originalAudioUrl") ?: localConfiguration?.uri?.toString().orEmpty(), description = mediaMetadata.description?.toString().orEmpty(),
-        podcastId = mediaMetadata.albumTitle?.toString().orEmpty())
 
     private fun cancelSleepTimer() {
         sleepTimer.cancel()

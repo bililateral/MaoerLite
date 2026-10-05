@@ -3,11 +3,9 @@ package com.maoer.lite.data.manager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
-import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
@@ -140,21 +138,7 @@ class AndroidMediaPlayerController(private val downloads: Downloads) : MediaPlay
         this.playlist = playlist
         playlistIds = playlist.map { it.id }
         playlistHash = 31 * playlist.hashCode() + playlist.map { downloads.localUri(it.id) }.hashCode()
-        playlistMediaItems = playlist.map { a ->
-            val metadata = MediaMetadata.Builder()
-                .setTitle(a.title)
-                .setArtist(a.author)
-                .setDescription(a.description.take(512))
-                .setAlbumTitle(a.podcastId)
-                .setExtras(Bundle().apply { putString("originalAudioUrl", a.audioUrl) })
-                .setArtworkUri(Uri.parse(a.coverUrl))
-                .build()
-            MediaItem.Builder()
-                .setMediaId(a.id)
-                .setUri(downloads.localUri(a.id) ?: a.audioUrl)
-                .setMediaMetadata(metadata)
-                .build()
-        }
+        playlistMediaItems = playlist.map { a -> a.toQueueMediaItem(downloads.localUri(a.id) ?: a.audioUrl) }
         // Force next play/prepare to (re)apply the queue if needed.
         // queueHash tracks the actually installed queue, including resolved download paths.
     }
@@ -244,16 +228,7 @@ class AndroidMediaPlayerController(private val downloads: Downloads) : MediaPlay
             if (didSetQueue) controller.prepare()
         } else {
             // 回退：仅播放单曲（无队列，则不会自动续播下一首）
-            val metadata = MediaMetadata.Builder()
-                .setTitle(audio.title)
-                .setArtist(audio.author)
-                .setArtworkUri(Uri.parse(audio.coverUrl))
-                .build()
-            val item = MediaItem.Builder()
-                .setMediaId(audio.id)
-                .setUri(audio.audioUrl)
-                .setMediaMetadata(metadata)
-                .build()
+            val item = audio.toStandaloneMediaItem()
             controller.setMediaItem(item)
             controller.prepare()
         }
@@ -283,16 +258,7 @@ class AndroidMediaPlayerController(private val downloads: Downloads) : MediaPlay
             val didSetQueue = ensureQueueAndSeek(controller, indexInPlaylist)
             if (didSetQueue) controller.prepare()
         } else {
-            val metadata = MediaMetadata.Builder()
-                .setTitle(audio.title)
-                .setArtist(audio.author)
-                .setArtworkUri(Uri.parse(audio.coverUrl))
-                .build()
-            val item = MediaItem.Builder()
-                .setMediaId(audio.id)
-                .setUri(audio.audioUrl)
-                .setMediaMetadata(metadata)
-                .build()
+            val item = audio.toStandaloneMediaItem()
             controller.setMediaItem(item)
             controller.prepare()
         }

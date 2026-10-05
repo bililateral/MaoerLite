@@ -6,6 +6,7 @@ import httpx
 from pydantic import Field, model_validator
 from protocol import ChatRequest, Message
 from rate_limit import Throttle, upstream_failure_code
+from upstream_io import limited_upstream, sse_data, TOTAL_TIMEOUT
 
 
 class ModelFailure(Exception):
@@ -31,8 +32,7 @@ class AgentChatRequest(ChatRequest):
     max_tokens: int = Field(default=4096, ge=1, le=8192)
 
 
-async def generate(app, settings, messages, tools, publish):
-    from app import limited_upstream, sse_data, TOTAL_TIMEOUT
+async def generate(settings, messages, tools, publish, *, client, gate):
     payload = AgentChatRequest.model_validate({'messages': messages, 'tools': tools or None,
                                               'tool_choice': 'auto' if tools else None,
                                               'stream': True, 'max_tokens': 8192 if settings.agent_thinking else 4096})
@@ -48,7 +48,6 @@ async def generate(app, settings, messages, tools, publish):
     else:
         for message in body['messages']:
             message.pop('reasoning_content', None)
-    gate = app.state.gate
     refusal = gate.enter()
     if isinstance(refusal, Throttle):
         raise ModelFailure(refusal.code, refusal.retryable, refusal.retry_after)
@@ -60,9 +59,9 @@ async def generate(app, settings, messages, tools, publish):
     try:
         async def read():
             nonlocal response, text, reasoning
-            request = app.state.client.build_request('POST', settings.endpoint,
+            request = client.build_request('POST', settings.endpoint,
                 headers={'Authorization': 'Bearer ' + settings.api_key}, json=body)
-            response = await app.state.client.send(request, stream=True)
+            response = await client.send(request, stream=True)
             if response.status_code == 429:
                 try:
                     data = await limited_upstream(response, 16384)

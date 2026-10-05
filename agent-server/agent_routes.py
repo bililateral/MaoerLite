@@ -7,7 +7,9 @@ from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import Field, ValidationError
 from protocol import StrictModel
-from agent_tasks import TaskConflict, Store, TERMINAL
+from task_state import TaskConflict, TERMINAL
+from task_store import Store
+from upstream_io import read_request
 
 
 class NewRun(StrictModel):
@@ -18,7 +20,6 @@ class NewRun(StrictModel):
 
 
 def register(app, settings):
-    from app import read_request
     async def authorized(request):
         actual = request.headers.get('authorization', '').encode()
         if not secrets.compare_digest(actual, ('Bearer ' + settings.access_token).encode()):

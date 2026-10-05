@@ -212,20 +212,27 @@ composeApp/src/
 ├── commonMain/kotlin/com/maoer/lite/
 │   ├── data/podcast/       # 内置目录、RSS、缓存与拼音索引
 │   ├── data/library/       # 收藏、历史、逐集进度与持久化
-│   ├── data/manager/       # 播放状态、队列与定时规则
+│   ├── data/manager/       # 播放状态、队列、定时规则与 PlaybackSnapshotStore 快照存储
 │   ├── data/download/      # 下载模型与接口
 │   ├── data/agent/
 │   │   ├── AgentApi.kt        # 任务HTTP接口、SSE快照与恢复
 │   │   ├── AgentModels.kt     # 会话/工具协议、批次进度与摘要状态
 │   │   ├── AgentSession.kt    # 应用级对话状态、发送/取消/新建与持久化
 │   │   ├── AgentSuggestions.kt # 真实目录驱动的每会话随机建议
-│   │   ├── AgentTools.kt      # 十二项手机业务工具、领取及执行去重
+│   │   ├── AgentTools.kt      # 会话调用工具的统一入口，组装执行器与处理器
+│   │   ├── AgentToolExecutor.kt # 领取、执行标记、去重、取消及未提交回执恢复
+│   │   ├── AgentToolResult.kt  # 工具失败结果的共同格式
+│   │   ├── CatalogToolHandler.kt # 目录搜索、分集与 RSS 资料工具适配
+│   │   ├── PlaybackToolHandler.kt # 播放控制、倍速、定时与执行状态确认
+│   │   ├── PlaybackStateReader.kt # 当前选中分集、节目身份与播放器状态投影
+│   │   ├── AgentConnectionManager.kt # 连接核验、旧任务归属检查及配置保存
 │   │   ├── AgentEpisodes.kt   # 分集分页、标题期号与列表位置选择及排序校验
 │   │   ├── AgentCatalogSummary.kt # 完整可用目录的编号、缺口与解析数量核查
 │   │   ├── PodcastKnowledge.kt # RSS资料读取、关键词检索与原文证据
 │   │   ├── AgentStorage.kt    # 连接、聊天及工具执行回执存储接口
 │   │   └── AgentTransport.kt  # HTTP/SSH连接与平台安全存储接口
 │   ├── ui/                 # 首页、分类、节目、播放、资料库和 agent 聊天页
+│   │   └── components/PlaybackComponents.kt # 共用播放栏及节目封面，保留原布局
 │   └── di/                 # 共享依赖配置
 ├── androidMain/
 │   ├── AndroidManifest.xml # 应用入口、网络及前台播放权限、服务声明
@@ -236,9 +243,11 @@ composeApp/src/
 │   │   ├── data/
 │   │   │   ├── agent/
 │   │   │   │   ├── AgentStorage.android.kt  # noBackupFilesDir 存储路径与发布日期解析
-│   │   │   │   └── AgentTransport.android.kt # SSH 隧道、主机指纹与 Keystore 凭据加密
+│   │   │   │   ├── AgentTransport.android.kt # SSH 隧道与主机指纹
+│   │   │   │   └── AgentCredentials.android.kt # Android Keystore 凭据加解密
 │   │   │   ├── manager/
-│   │   │   │   └── AndroidMediaPlayerController.kt # 连接媒体服务、控制播放、同步状态
+│   │   │   │   ├── AndroidMediaPlayerController.kt # 连接媒体服务、控制播放、同步状态
+│   │   │   │   └── MediaItemMapper.kt         # 队列/单项媒体构造及 Audio 反向映射
 │   │   │   ├── download/
 │   │   │   │   └── AndroidDownloads.kt       # 系统下载任务、状态恢复与本地文件
 │   │   │   └── local/
@@ -255,20 +264,36 @@ iosApp/                    # iOS 宿主工程
 agent-server/              # Python 模型网关、LangGraph 任务流程与检查点
 ├── main.py                # 加载配置，启动 Uvicorn HTTP 服务
 ├── config.py              # 模型 Base URL / Key、监听地址及独立客户端访问令牌
-├── app.py                 # FastAPI 生命周期、HTTPX 连接、原始聊天网关与共享准入限制
+├── app.py                 # FastAPI 生命周期、共享依赖组装与原始聊天网关
+├── upstream_io.py         # 有界 HTTP 响应、SSE 读取与连接中断处理
+├── model_gate.py          # 请求准入、并发及冷却状态
 ├── protocol.py            # 聊天协议校验、工具消息配对、上游请求及公开响应字段
 ├── rate_limit.py          # 通用 429 分类、Retry-After 解析与共享冷却策略
 ├── agent_routes.py        # Agent 任务接口、SSE 快照、工具领取与结果回传
-├── agent_tasks.py         # LangGraph 流程、SQLite 持久化、中断恢复、幂等与取消
+├── agent_tasks.py         # 任务生命周期、取消、重试、删除和启动恢复
+├── agent_graph.py         # prepare/model/device 节点、摘要准备、模型重试及工具预算
+├── task_state.py          # 检查点状态字段、任务异常、预算与终态定义
+├── task_store.py          # SQLite 任务、摘要、删除标记及公开快照
+├── tool_dispatch.py       # 批次逐项派发、领取、回执去重与失败控制
+├── selection_policy.py    # 选集证据、确认条件和播放前刷新依赖
+├── agent_prompts.py       # 基础提示、客户端能力规则及每轮动态提示
 ├── agent_memory.py        # 完整多轮上下文预算、真实候选引用、顺序与来源、过期裁剪
 ├── agent_summary.py       # 旧对话滚动摘要、分批资料预算、结构校验与失效提示
 ├── agent_model.py         # 模型流式适配、文字增量发布、工具参数片段组装
-├── agent_tools.py         # 十二项业务工具定义、参数约束与系统提示
+├── agent_tools.py         # 十二项业务工具定义与参数校验
 ├── chat.py                # 本地终端文字聊天客户端，不执行 Android 业务工具
 ├── start.ps1              # Windows 前台运行、后台启动与停止
 ├── start.sh               # Linux 用户目录启动、进程锁、状态查询与停止
 └── requirements.txt       # FastAPI、HTTPX、LangGraph 等 Python 依赖版本锁定
 ```
+
+这轮按文件和类拆分职责，仍保留一个 `composeApp` Gradle 模块和一个 Python 服务进程。任务 API、工具协议、SQLite 表、LangGraph 检查点、播放快照键与凭据加密格式保持兼容。Android 的 `AgentTools` 组装业务处理器与 `AgentToolExecutor`，后者统一维护“领取 → 保存执行标记 → 操作 → 保存结果”的顺序；会话取消补传与新建删除流程继续复用这一机制。
+
+2026-10-05 模块拆分验证：重构前后 8 组服务端隔离回归均通过，相同样本的模型输入在归一化任务 ID 后完全一致；旧版本待执行检查点可由新版本继续处理，不重复派发已完成工具。Medium Phone / API 36.1 独立测试包完成 13 项设备检查，覆盖全部 12 个工具、真实 Media3 自动/手动续听、首尾循环、定时停止、重复执行去重、取消补传和删除失败重试。现有单元测试 38 项通过、1 项外部 RSS 快照未提供而跳过。设备验证使用可控 RSS、静音音频及 HTTP 夹具，不等同于本轮已复测远端真实模型和全部外部节目源。标准业务构建通过，正式包已安装到模拟器；本轮未部署远端服务，真机未操作。首页、分类、聊天及键盘布局已核查，公共 UI 定义原样迁移，原预览图继续表达相同布局，不将旧对话截图标为本轮新增模型验收。
+
+2026-10-05 后续交接复核：在上述验证之后，完成 11 组服务端 HTTP／流式适配／数据库前后对照、旧新 Android 独立包各 20 项业务检查，以及旧新服务端各 21 项边界测试，已执行样本未发现重构行为差异。补充的 64 项 Kotlin 测试全部通过、无跳过，包含当日 30 份真实 RSS 解析；模拟器完成 27 项界面检查，涵盖搜索、键盘占位、重启、大字体、Markdown 表格和 105 集分页／完整队列。另有 7 个真实配置模型的隔离意图样本通过，设备回执使用夹具，不代表全部自然语言场景或手机端到端均已验证。
+
+本次还修复了重构前已有的 RSS 节选边界问题：关键词仅命中标题时，长简介原先返回 900 字符后再追加省略号，实际超过上限；现在标点和省略号均计入 900 字符预算。30 个 RSS、30 张封面、90 个音频 HTTP 样本通过；下载在系统网络验证正常时完成自然调度、重试、离线解码与删除回归，模拟器默认网络探测限制仍保留。来源许可、长期稳定性及真机／蓝牙／TalkBack 等专项尚未全部验收，30 个内置源继续关闭下载。含此修复的标准 APK 已生成，后续核查未覆盖正式 App 安装，也未部署远端服务。验收脚本和临时产物已清理，维护记录及必要证据仅本地保留。
 
 ### Android 层如何协作
 
@@ -293,11 +318,17 @@ agent-server/              # Python 模型网关、LangGraph 任务流程与检�
 | `main.py` / `config.py` | 读取 `.local/agent.env` 中的 OpenAI-compatible Base URL、模型和 API Key，创建或读取独立的客户端访问令牌，再启动 Uvicorn。上游 Key 留在服务端，客户端不能覆盖模型配置。 |
 | `app.py` / `protocol.py` | 创建 FastAPI 应用，在生命周期内打开、关闭共享 HTTPX 客户端和任务服务；校验访问令牌、请求大小、消息角色及工具结果配对，提供 `/v1/chat/completions` 网关，并过滤对外响应字段。 |
 | `agent_routes.py` | 提供任务创建、查询、取消、重试及会话删除接口；通过 SSE 返回带版本号的完整任务快照，接收 Android 的工具领取和执行结果。SSE 包含逐步增长的回复文字，但不是原样转发上游 Token 事件。 |
-| `agent_tasks.py` | 编排 LangGraph 的 `prepare`、`model`、`device` 三个节点；准备阶段整理超出预算的旧对话，随后正常问答。保存摘要覆盖记录、任务状态与检查点；接收最多 8 项的模型批次，每次只向手机派发一项。管理逐项回执、失败控制、24 次工具预算、收尾回答、失败重试、中断恢复及幂等；已完成的摘要准备步骤在模型重试时直接复用。 |
-| `agent_memory.py` | 从已完成任务提取有预算的完整交流，从成功工具回执构建候选引用和历史播放对象；引用参与真实 ID 校验，与任务及检查点一起持久化、删除。记忆仅在服务端组装模型输入时附加，不作为额外字段传给 Android。 |
+| `agent_tasks.py` | 协调任务创建、后台运行、取消、重试、会话删除与服务重启恢复；通过存储、图和工具派发模块完成流程，不直接执行 SQL。 |
+| `agent_graph.py` / `task_state.py` | 保持 `prepare`、`model`、`device` 三个节点及原检查点字段；负责摘要准备、模型有限重试、每任务 24 次工具预算及收尾回答，在设备节点中断等待真实回执。 |
+| `task_store.py` | 持久化任务、摘要与删除标记；统一任务查询、更新及对外快照字段过滤，继续使用原 SQLite 表和两个数据库文件。 |
+| `tool_dispatch.py` | 接收最多 8 项的批次，每次向手机派发一项；保存领取与执行回执、去重，控制失败后跳过后续控制但允许独立读取，接收取消后迟到回执。 |
+| `selection_policy.py` | 根据真实工具证据判断选集是否需要确认及是否需要先刷新；返回结构化候选与条件，确认文案仍由模型生成。 |
+| `agent_prompts.py` | 集中基础提示、客户端选集能力和模型配置、本轮状态、预算耗尽提示；与工具参数定义分离，整理不改变既有提示内容。 |
+| `agent_memory.py` | 从已结束任务提取有预算的交流，保留失败、取消轮的用户要求及已有回执，从成功工具回执构建候选引用和历史播放对象；引用参与真实 ID 校验，与任务及检查点一起持久化、删除。记忆仅在服务端组装模型输入时附加，不作为额外字段传给 Android。 |
 | `agent_summary.py` | 限制待整理资料、构造摘要提示、校验四组结构化摘要的格式与长度；将摘要标为低信任背景，提示最新要求优先、缺失时澄清，不能作为工具 ID 或实时状态证据。原始 RSS 长文和内部 ID 不写入整理资料的工具记录。 |
 | `agent_model.py` | 调用模型并解析 SSE，将文字增量发布给任务状态；组装完整的工具名称、调用 ID 和 JSON 参数，再交给任务层校验，避免执行尚未接收完整的工具请求。 |
-| `agent_tools.py` | 定义搜索、分集查询、播放状态、播放、暂停、继续、上一集、下一集、倍速和睡眠定时，以及节目资料读取、分集内容检索共十二项工具，约束参数及模型行为。实际 RSS 查询和播放器操作由 Android 执行。 |
+| `agent_tools.py` | 定义搜索、分集查询、播放状态、播放、暂停、继续、上一集、下一集、倍速和睡眠定时，以及节目资料读取、分集内容检索共十二项工具，约束参数并校验完整工具调用。实际 RSS 查询和播放器操作由 Android 执行。 |
+| `upstream_io.py` / `model_gate.py` | 独立于 Web 入口提供有界 HTTP/SSE 读取和请求准入；模型适配器显式接收共享 HTTPX 客户端与 Gate，不再反向导入 `app.py`。 |
 | `rate_limit.py` | 解析通用 429 错误和 `Retry-After`，计算共享冷却时间；模型节点据此安排有限重试。额度错误及未知 429 不盲目重试，文件中已无智谱专用错误码逻辑。 |
 | `start.ps1` / `start.sh` | 管理当前用户目录下的启动、日志和进程；Linux 脚本复用已有 Python/Conda 环境并使用进程锁。当前脚本不提供开机自启或崩溃自动拉起。 |
 
@@ -307,7 +338,7 @@ agent-server/              # Python 模型网关、LangGraph 任务流程与检�
 flowchart TD
     A[Android 点播助手] -->|App SSH 隧道 / HTTP| B[agent_routes：创建或恢复任务]
     B --> P[prepare：近期原文与旧对话摘要]
-    P --> C[agent_tasks：LangGraph model 节点]
+    P --> C[agent_graph：LangGraph model 节点]
     C --> D[agent_model：通过共享 HTTPX 调用模型]
     D --> E{完整模型输出}
     E -->|最终文字| F[保存任务结果]
@@ -316,7 +347,7 @@ flowchart TD
     H -->|SSE 快照中的待执行工具| A
     A -->|领取工具并调用真实业务| I[Android 目录 / RSS / 播放器]
     I -->|真实执行回执| J[agent_routes：提交结果]
-    J --> K[校验并保存回执，Command resume]
+    J --> K[tool_dispatch：保存回执并恢复任务]
     K --> C
     F -->|SSE 任务快照| A
 ```

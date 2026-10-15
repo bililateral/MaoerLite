@@ -127,10 +127,21 @@ class AgentTasks:
         try: run = self.get_run(run_id)
         except KeyError: raise TaskConflict('conversation_deleted') from None
         if run['status'] != 'failed' or run_id in self.jobs: raise TaskConflict('task_not_retryable')
-        if not snapshot.next or any(task.interrupts for task in snapshot.tasks):
+        value = None
+        interrupted = [task for task in snapshot.tasks if task.interrupts]
+        if interrupted:
+            # A node may fail after interrupt() consumed the device receipts.
+            # Resume only a fully recorded batch; never dispatch/claim it again.
+            calls = snapshot.values.get('calls', [])
+            receipts = {r['call_id']: r for r in run.get('results', [])}
+            if (any(task.name != 'device' or not task.error for task in interrupted)
+                    or not calls or any(c['id'] not in receipts for c in calls)):
+                raise TaskConflict('task_not_retryable')
+            value = Command(resume=[receipts[c['id']] for c in calls])
+        elif not snapshot.next:
             raise TaskConflict('task_not_retryable')
         run = self.store.update(run_id, status='generating', text='', error='', retry_after=0)
-        self.launch(run_id, None)
+        self.launch(run_id, value)
         return run
 
     async def delete_conversation(self, conversation):

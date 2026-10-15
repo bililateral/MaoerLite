@@ -201,10 +201,11 @@ class AgentGraph:
                 'tool_count': count + len(calls), 'memory': memory}
 
 
-    def device_node(self, state, config: RunnableConfig):
+    async def device_node(self, state, config: RunnableConfig):
         # No side effects before interrupt: this node restarts on resume.
-        # Python 3.10 does not propagate Runnable context through async tasks.
-        # Explicitly use the supplied public config/context for this sync node.
+        # Keep receipt/source persistence on the event-loop thread that owns
+        # Store's SQLite connection; synchronous graph nodes run in a worker.
+        # Python 3.10 needs the explicit Runnable context for interrupt/resume.
         with set_config_context(config) as context:
             results = context.run(interrupt, {'calls': state['calls']})
         results = results + state.get('deferred_results', [])

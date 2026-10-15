@@ -124,6 +124,9 @@ class MaoerPlaybackService : MediaLibraryService() {
             }
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                 if (!playWhenReady && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM) {
+                    // Media3 pauses in STATE_READY here. Record the actual end event before
+                    // clearing the timer, independently of pauseAtEndOfMediaItems.
+                    persistPlaybackSnapshot(ended = true)
                     cancelSleepTimer()
                 }
             }
@@ -190,7 +193,7 @@ class MaoerPlaybackService : MediaLibraryService() {
         super.onDestroy()
     }
 
-    private fun persistPlaybackSnapshot() {
+    private fun persistPlaybackSnapshot(ended: Boolean = false) {
         // Do not overwrite the saved position with a temporary zero during offline restoration.
         if (player.playbackState == Player.STATE_IDLE || player.playbackState == Player.STATE_BUFFERING) return
         val currentId = player.currentMediaItem?.mediaId ?: return
@@ -202,8 +205,7 @@ class MaoerPlaybackService : MediaLibraryService() {
         snapshots.trySend(PlaybackSnapshot(queue, currentId, player.currentPosition.coerceAtLeast(0), player.playbackParameters.speed))
         if (currentId in heardIds) queue.find { it.id == currentId }?.let {
             progressWrites.trySend(ProgressWrite(it, player.currentPosition, player.duration.coerceAtLeast(0),
-                System.currentTimeMillis(), player.playbackState == Player.STATE_ENDED ||
-                    (player.pauseAtEndOfMediaItems && player.duration > 0 && player.currentPosition >= player.duration)))
+                System.currentTimeMillis(), ended || player.playbackState == Player.STATE_ENDED))
         }
     }
 

@@ -14,6 +14,7 @@ import com.maoer.lite.data.library.ListeningLibrary
 import com.maoer.lite.ui.library.ListeningActions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -76,15 +77,15 @@ data class PodcastScreen(val sourceId: String) : Screen {
         val feed by model.feed.collectAsState()
         val loading by model.loading.collectAsState()
         val error by model.error.collectAsState()
-        var query by remember { mutableStateOf("") }
-        var reverse by remember { mutableStateOf(false) }
-        var count by remember { mutableStateOf(50) }
+        var query by rememberSaveable { mutableStateOf("") }
+        var reverse by rememberSaveable { mutableStateOf(false) }
+        // Preserve the browsing window on return; only a changed filter resets pagination.
+        var count by rememberSaveable(query, reverse) { mutableStateOf(50) }
         val episodes = remember(feed, query, reverse) {
             val all = feed?.episodes.orEmpty().filter { it.title.contains(query.trim(), true) }
             if (reverse) all.reversed() else all
         }
-        LaunchedEffect(query, reverse) { count = 50 }
-        val listState = remember(query, reverse) { LazyListState() }
+        val listState = rememberSaveable(query, reverse, saver = LazyListState.Saver) { LazyListState() }
         Scaffold(
             topBar = { TopAppBar(title = { Text(model.source.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigationIcon = { IconButton(onClick = { navigator?.pop() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } },

@@ -57,10 +57,11 @@ object HomeScreen : Screen {
         var selectedTab by rememberSaveable { mutableStateOf(0) }
         var query by rememberSaveable { mutableStateOf("") }
         var categoryQuery by rememberSaveable { mutableStateOf("") }
-        // Keep each page's scroll state across tab switches; a new search starts at the top.
-        val listState = remember(query) { LazyListState() }
-        val categoryListState = remember(categoryQuery) { LazyListState() }
-        val categoryRailState = remember(categoryQuery) { LazyListState() }
+        // Keep each page's scroll state across navigation as well as tab switches.
+        // A changed search still starts at the top.
+        val listState = rememberSaveable(query, saver = LazyListState.Saver) { LazyListState() }
+        val categoryListState = rememberSaveable(categoryQuery, saver = LazyListState.Saver) { LazyListState() }
+        val categoryRailState = rememberSaveable(categoryQuery, saver = LazyListState.Saver) { LazyListState() }
         val sources = remember(query, model) { model.searchIndex.search(query) }
         val paper = Color(0xFFFAF7F2)
         val ink = Color(0xFF292623)

@@ -1,5 +1,6 @@
 package com.maoer.lite.data.agent
 
+import com.maoer.lite.data.error.errorText
 import com.maoer.lite.data.podcast.PodcastFeed
 import kotlinx.serialization.json.*
 
@@ -39,7 +40,7 @@ internal fun episodeSelection(feed: PodcastFeed, args: JsonObject): JsonObject {
     val dates = feed.episodes.associate { it.id to agentPublishedMillis(it.published) }
     val datesVerified = feed.episodes.isNotEmpty() && dates.values.all { it != null }
     if (order == "newest" && position > 0 && !datesVerified) return buildJsonObject {
-        put("status", "error"); put("note", "部分发布日期无法确认，不能按从新到旧的第N条定位；请选择原始列表顺序或标题。")
+        put("status", "error"); put("note", errorText("rss_dates_unknown"))
         put("feed_total", feed.episodes.size)
     }
     val ordered = when (order) {

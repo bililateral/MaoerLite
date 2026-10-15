@@ -1,5 +1,6 @@
 package com.maoer.lite.data.manager
 
+import com.maoer.lite.data.error.errorText
 import com.maoer.lite.data.local.KeyValueStorage
 import com.maoer.lite.data.model.Audio
 import com.maoer.lite.data.library.ListeningLibrary
@@ -97,7 +98,7 @@ class PlayerManager(private val storage: KeyValueStorage, private val mediaContr
                 mediaController.play(enriched)
                 if (!same || entry?.completed == true) mediaController.seekToMs(start)
             } catch (e: CancellationException) { throw e }
-            catch (_: Exception) { _libraryError.value = "无法保存续听记录，请检查存储空间后重试" }
+            catch (_: Exception) { _libraryError.value = errorText("resume_record_write_failed") }
         }
     }
     private suspend fun enrich(audio: Audio): Audio {
@@ -107,7 +108,7 @@ class PlayerManager(private val storage: KeyValueStorage, private val mediaContr
     }
     private suspend fun <T> optional(block: suspend () -> T): T? = try { block() }
         catch (e: CancellationException) { throw e }
-        catch (_: Exception) { _libraryError.value = "本地记录暂不可用，播放可继续；原记录已保留"; null }
+        catch (_: Exception) { _libraryError.value = errorText("library_unavailable"); null }
     fun resume() {
         val audio = currentAudio.value
         if (audio != null && library.entries.value.any { it.audio.id == audio.id && it.completed }) play(audio)

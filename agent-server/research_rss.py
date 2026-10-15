@@ -4,10 +4,13 @@ import html
 import json
 import re
 import time
+import httpx
+import sqlite3
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from urllib.parse import urlsplit
 from research_store import digest
+from error_messages import error_message
 
 CATALOG = json.loads(Path(__file__).with_name('research_catalog.json').read_text(encoding='utf-8'))
 CONTENT = '{http://purl.org/rss/1.0/modules/content/}encoded'
@@ -65,7 +68,7 @@ class RssResearch:
                                          local_files_only=True, specific_model_path=str(snapshot))
         return self.encoder
 
-    async def load(self, source, force=False):
+    async def load(self, source, force=False, diagnostics=None):
         fetched, rows = self.store.feed(source['id'])
         if not force and rows and time.time() - fetched < 3600: return fetched, rows
         async with self.slots:
@@ -78,12 +81,24 @@ class RssResearch:
                     async for block in response.aiter_bytes():
                         raw.extend(block)
                         if len(raw) > 8_000_000: raise ValueError('rss_too_large')
-                rows = await asyncio.to_thread(parse_feed, bytes(raw), source)
-                fetched = int(time.time())
-                self.store.save_feed(source['id'], fetched, rows)
-            except (Exception,):
+                updated = await asyncio.to_thread(parse_feed, bytes(raw), source)
+                updated_at = int(time.time())
+                self.store.save_feed(source['id'], updated_at, updated)
+                fetched, rows = updated_at, updated
+            except Exception as exc:
                 # Preserve a real last-successful timestamp; never call it fresh.
-                pass
+                code, status = 'rss_load_failed', None
+                if isinstance(exc, httpx.ConnectTimeout): code = 'rss_connect_timeout'
+                elif isinstance(exc, httpx.TimeoutException): code = 'rss_read_timeout'
+                elif isinstance(exc, httpx.HTTPStatusError):
+                    status = exc.response.status_code
+                    code = {404: 'rss_not_found', 401: 'rss_access_denied', 403: 'rss_access_denied', 429: 'rss_rate_limited'}.get(status, 'rss_http_error')
+                elif isinstance(exc, httpx.RequestError): code = 'rss_connection_failed'
+                elif isinstance(exc, sqlite3.Error): code = 'server_storage_error'
+                elif isinstance(exc, (ValueError, ET.ParseError)):
+                    code = 'rss_too_large' if str(exc) == 'rss_too_large' else 'rss_parse_failed'
+                if diagnostics is not None:
+                    diagnostics[source['id']] = {'code': code, 'note': error_message(code, status=status), 'cached': bool(rows)}
             return fetched, rows
 
     def entries(self, rows):
@@ -121,8 +136,12 @@ class RssResearch:
 
     async def search(self, query, podcast_id=''):
         sources = [s for s in CATALOG if not podcast_id or s['id'] == podcast_id]
-        if not sources: return {'status': 'error', 'note': '节目身份不存在。'}
-        feeds = await asyncio.gather(*(self.load(s) for s in sources))
+        if not sources: return {'status': 'error', 'code': 'rss_podcast_missing', 'note': error_message('rss_podcast_missing')}
+        failures = {}
+        feeds = await asyncio.gather(*(self.load(s, diagnostics=failures) for s in sources))
+        if failures and not any(rows for _, rows in feeds):
+            return {'status': 'error', 'code': 'rss_all_unavailable', 'note': error_message('rss_all_unavailable'),
+                    'failures': failures, 'coverage_available': 0, 'coverage_total': len(sources), 'items': []}
         rows = [r for _, group in feeds for r in group]
         entries = list(self.entries(rows))
         vectors = self.store.vectors([e[0] for e in entries])
@@ -149,7 +168,7 @@ class RssResearch:
             selected.add(row['id'])
             items.append(self.evidence(row, text, start, timestamps.get(row['id'], 0)))
             if len(items) == 6: break
-        return {'status': 'ok', 'items': items, 'coverage_available': sum(bool(r) for _, r in feeds),
+        return {'status': 'ok', 'items': items, 'failures': failures, 'coverage_available': sum(bool(r) for _, r in feeds),
                 'coverage_total': len(sources), 'semantic_indexed_passages': len(vectors) if vector is not None else 0,
                 'total_passages': len(entries), 'audio_analyzed': False,
                 'note': f'RSS可用源 {sum(bool(r) for _, r in feeds)}/{len(sources)}；语义索引覆盖 {len(vectors) if vector is not None else 0}/{len(entries)} 个片段。其余仅按关键词检索。只返回相关片段，不代表音频全文或全部结果。'}
@@ -162,14 +181,16 @@ class RssResearch:
 
     async def read(self, podcast_id, episode_id, offset=0):
         source = next((s for s in CATALOG if s['id'] == podcast_id), None)
-        if not source: return {'status': 'error', 'note': '节目身份不存在。'}
-        fetched, rows = await self.load(source)
+        if not source: return {'status': 'error', 'code': 'rss_podcast_missing', 'note': error_message('rss_podcast_missing')}
+        failures = {}
+        fetched, rows = await self.load(source, diagnostics=failures)
+        if not rows and failures: return {'status': 'error', **failures[podcast_id]}
         row = next((r for r in rows if r['id'] == episode_id), None)
-        if not row: return {'status': 'error', 'note': '当前可用RSS没有该分集，未读取原文。'}
+        if not row: return {'status': 'error', 'code': 'rss_episode_missing', 'note': error_message('rss_episode_missing')}
         body = row['description']
         excerpt = body[offset:offset + 4000]
         more = offset + len(excerpt) < len(body)
-        return {'status': 'ok', 'items': [self.evidence(row, excerpt, offset, fetched)], 'has_more': more,
+        return {'status': 'ok', 'items': [self.evidence(row, excerpt, offset, fetched)], 'failures': failures, 'has_more': more,
                 'next_offset': offset + len(excerpt), 'total_characters': len(body),
                 'note': '分集RSS说明，非音频转写。' + ('源文本超过读取上限，完整性未保证。' if row['description_truncated'] else '')}
 

@@ -33,6 +33,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
+import com.maoer.lite.data.error.*
 
 class PodcastViewModel(private val id: String, private val repository: PodcastRepository) : ScreenModel {
     val source = repository.source(id)
@@ -52,9 +53,9 @@ class PodcastViewModel(private val id: String, private val repository: PodcastRe
                 _error.value = null
                 _feed.value = repository.refresh(id)
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) {
-                _error.value = if (_feed.value == null) "节目暂时加载失败，请检查网络后重试。"
-                    else "更新失败，正在显示上次缓存的分集。"
+            catch (e: Exception) {
+                val message = failureText(e, rssFailureCode(e))
+                _error.value = if (_feed.value == null) message else errorText("rss_cached_notice", "message" to message)
             } finally { _loading.value = false }
         }
     }

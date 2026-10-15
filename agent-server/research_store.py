@@ -67,6 +67,10 @@ class ResearchStore:
         with self.lock:
             return self.db.execute('SELECT COALESCE(SUM(credits),0) FROM requests WHERE month=?', (month,)).fetchone()[0]
 
+    def reserved(self, request_id):
+        with self.lock:
+            return self.db.execute('SELECT 1 FROM requests WHERE id=?', (request_id,)).fetchone() is not None
+
     def state(self, key):
         with self.lock:
             row = self.db.execute('SELECT body FROM research_state WHERE id=?', (key,)).fetchone()

@@ -1,5 +1,6 @@
 package com.maoer.lite.data.podcast
 
+import com.maoer.lite.data.error.errorText
 import nl.adaptivity.xmlutil.EventType
 import nl.adaptivity.xmlutil.xmlStreaming
 import okio.ByteString.Companion.encodeUtf8
@@ -13,8 +14,8 @@ class RssParser {
     }
 
     fun parse(xml: String, source: PodcastSource): PodcastFeed {
-        require(xml.length <= 8_000_000) { "节目源过大，暂不支持" }
-        require(!xml.contains("<!DOCTYPE", true) && !xml.contains("<!ENTITY", true)) { "不支持带实体声明的节目源" }
+        require(xml.length <= 8_000_000) { errorText("rss_too_large") }
+        require(!xml.contains("<!DOCTYPE", true) && !xml.contains("<!ENTITY", true)) { errorText("rss_entities_unsupported") }
         val reader = xmlStreaming.newGenericReader(xml.removePrefix("\uFEFF"))
         val stack = mutableListOf<Node>()
         val entries = mutableListOf<Entry>()
@@ -26,7 +27,7 @@ class RssParser {
             while (reader.hasNext()) {
                 when (reader.next()) {
                     EventType.START_ELEMENT -> {
-                        require(stack.size < 64) { "节目源结构过深" }
+                        require(stack.size < 64) { errorText("rss_structure_too_deep") }
                         val node = Node(reader.localName, reader.namespaceURI)
                         val parent = stack.lastOrNull()?.name
                         stack.add(node)
@@ -82,7 +83,7 @@ class RssParser {
                             parent.value.append(" ").append(value.take(32_768 - parent.value.length))
                         }
                     }
-                    EventType.DOCDECL -> error("不支持 XML 实体声明")
+                    EventType.DOCDECL -> error(errorText("rss_xml_entities_unsupported"))
                     else -> Unit
                 }
             }

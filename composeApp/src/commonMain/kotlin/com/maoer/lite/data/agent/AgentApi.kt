@@ -12,6 +12,7 @@ import kotlinx.serialization.json.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import com.maoer.lite.data.error.AppFailure
 
 class AgentApiException(val code: String, val status: Int) : Exception(code)
 
@@ -47,7 +48,7 @@ class AgentApi(
     }
     private suspend fun request(path: String, value: String? = null, post: Boolean = false): AgentRun {
         val connection = storage.connection()
-        require(connection.token.isNotBlank()) { "connection_missing" }
+        if (connection.token.isBlank()) throw AppFailure("connection_missing")
         val response = client.request(transport.endpoint(connection) + path) {
             method = if (post) HttpMethod.Post else HttpMethod.Get
             header(HttpHeaders.Authorization, "Bearer ${connection.token}")
@@ -59,7 +60,7 @@ class AgentApi(
     }
     private fun fail(body: String, status: Int): Nothing {
         val code = runCatching { json.parseToJsonElement(body).jsonObject["error"]?.jsonObject?.get("code")?.jsonPrimitive?.content }.getOrNull()
-        throw AgentApiException(code ?: "connection_error", status)
+        throw AgentApiException(code ?: "service_http_error", status)
     }
     suspend fun create(value: AgentNewRun): AgentRun {
         try { return request("/v1/agent/runs", json.encodeToString(value), true) }
@@ -87,7 +88,7 @@ class AgentApi(
     suspend fun results(id: String, values: List<AgentReceipt>) = request("/v1/agent/runs/$id/results", json.encodeToString(AgentResults(values)), true)
     suspend fun deleteConversation(id: String) {
         val connection = storage.connection()
-        require(connection.token.isNotBlank()) { "connection_missing" }
+        if (connection.token.isBlank()) throw AppFailure("connection_missing")
         val response = client.request(transport.endpoint(connection) + "/v1/agent/conversations/${id.encodeURLPathPart()}") {
             method = HttpMethod.Delete
             header(HttpHeaders.Authorization, "Bearer ${connection.token}")
@@ -95,7 +96,8 @@ class AgentApi(
         val body = response.bodyAsText()
         if (response.status.value !in 200..299) fail(body, response.status.value)
         val result = json.parseToJsonElement(body).jsonObject
-        check(result["deleted"]?.jsonPrimitive?.booleanOrNull == true && result["conversation_id"]?.jsonPrimitive?.content == id)
+        if ((result["deleted"] as? JsonPrimitive)?.booleanOrNull != true ||
+            (result["conversation_id"] as? JsonPrimitive)?.contentOrNull != id) throw AppFailure("service_response_invalid")
     }
     suspend fun events(id: String, update: suspend (AgentRun) -> Unit) {
         val connection = storage.connection()

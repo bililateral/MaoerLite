@@ -8,6 +8,7 @@ from langgraph.types import interrupt
 from langchain_core.runnables import RunnableConfig
 from langchain_core.runnables.config import set_config_context
 from agent_model import ModelFailure
+from error_messages import error_message
 from agent_tools import definitions, validated_calls
 from agent_prompts import model_instructions
 from agent_memory import last_turn, model_messages, references, remember, replay_references
@@ -62,7 +63,7 @@ class AgentGraph:
         for _ in range(MAX_BATCHES):
             if not pending:
                 break
-            self.store.update(run_id, status='summarizing', summary_turns=len(saved['covered']),
+            self.store.update(run_id, status='summarizing', phase='summary', summary_turns=len(saved['covered']),
                               summary_pending=len(pending))
             ids, records = batch(pending)
             try:
@@ -81,6 +82,7 @@ class AgentGraph:
                           summary_pending=len(pending), summary_error=failure)
         extra = {}
         if state.get('research'):
+            self.store.update(run_id, phase='intent')
             route = await classify(self.model, self.settings, state['messages'], CATALOG if 'search_hints' in self.get_run(run_id)['input'].get('capabilities', []) else [])
             extra['route'] = route
             self.store.update(run_id, search_hint=route['hint'], route=route, sources=[])
@@ -107,7 +109,8 @@ class AgentGraph:
         async def publish(text):
             self.store.update(run_id, text=text, status='generating', retry_after=0)
         for attempt in range(3):
-            self.store.update(run_id, text='', status='generating', retry_after=0, error='')
+            self.store.update(run_id, text='', status='generating', retry_after=0, error='', error_detail={},
+                              phase='model_analysis' if state.get('tool_count', 0) else 'model_planning')
             try:
                 message = await self.model(self.settings,
                                            messages, [] if final_only else available, publish)
@@ -120,7 +123,10 @@ class AgentGraph:
                                   retry_at=int(time.time() + exc.delay))
                 await asyncio.sleep(exc.delay)
                 waited += exc.delay
-        calls = validated_calls(message, state.get('extended_episodes', False))
+        try:
+            calls = validated_calls(message, state.get('extended_episodes', False))
+        except (ValueError, KeyError, TypeError):
+            raise ModelFailure('invalid_tool_call') from None
         if final_only and calls:
             raise ModelFailure('tool_round_limit')
         if not calls and state.get('research') and not valid_citations(message.get('content'), self.get_run(run_id).get('sources', [])):
@@ -176,9 +182,10 @@ class AgentGraph:
         for call in calls:
             if call['name'] not in allowed:
                 deferred.append(self.record_result(run_id, {'call_id': call['id'], 'result': {
-                    'status': 'error', 'executed': False, 'note': '此工具不适用于用户本轮意图，请直接回答或使用本轮允许的工具。'}}))
+                    'status': 'error', 'executed': False, 'code': 'tool_not_allowed', 'note': error_message('tool_not_allowed')}}))
                 continue
             if call['name'] in SERVER_TOOLS:
+                self.store.update(run_id, phase=call['name'])
                 run = self.get_run(run_id)
                 old = next((r for r in run['results'] if r['call_id'] == call['id']), None)
                 receipt = old or {'call_id': call['id'], 'result': await self.research.perform(call, run)}
@@ -208,6 +215,7 @@ class AgentGraph:
         # Python 3.10 needs the explicit Runnable context for interrupt/resume.
         with set_config_context(config) as context:
             results = context.run(interrupt, {'calls': state['calls']})
+        self.store.update(state['run_id'], phase='device_receipt')
         results = results + state.get('deferred_results', [])
         if state.get('research'):
             results = [self.record_result(state['run_id'], r) for r in results]

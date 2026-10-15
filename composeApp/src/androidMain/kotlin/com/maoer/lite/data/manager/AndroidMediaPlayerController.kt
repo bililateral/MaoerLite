@@ -1,5 +1,6 @@
 package com.maoer.lite.data.manager
 
+import com.maoer.lite.data.error.errorText
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -124,9 +125,9 @@ class AndroidMediaPlayerController(private val downloads: Downloads) : MediaPlay
                 setupControllerListener()
                 applyPendingCommands()
             } catch (e: ExecutionException) {
-                _playbackError.value = "连接播放器失败，请重新打开应用"
+                _playbackError.value = errorText("player_service_connect_failed")
             } catch (e: InterruptedException) {
-                _playbackError.value = "连接播放器失败，请重新打开应用"
+                _playbackError.value = errorText("player_service_connect_failed")
             }
         }, MoreExecutors.directExecutor())
 
@@ -158,7 +159,7 @@ class AndroidMediaPlayerController(private val downloads: Downloads) : MediaPlay
             }
             override fun onPlayerError(error: PlaybackException) {
                 _buffering.value = false
-                _playbackError.value = "播放失败，请检查网络或重试（${error.errorCodeName}）"
+                _playbackError.value = playbackFailureMessage(error)
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 _isPlaying.value = isPlaying

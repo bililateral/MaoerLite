@@ -1,5 +1,6 @@
 package com.maoer.lite.data.library
 
+import com.maoer.lite.data.error.errorText
 import com.maoer.lite.data.model.Audio
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -62,7 +63,7 @@ class ListeningLibrary(
             _ready.value = true
             loaded.complete(Unit)
         } catch (e: Exception) {
-            _error.value = "收听记录读取失败，请重新打开应用；原文件已保留"
+            _error.value = errorText("library_read_failed")
             loaded.completeExceptionally(e)
         }
     } }
@@ -70,7 +71,7 @@ class ListeningLibrary(
     suspend fun awaitReady() = loaded.await()
     suspend fun entry(id: String): ListeningEntry? { awaitReady(); return _entries.value.find { it.audio.id == id } }
     fun clearError() { _error.value = null }
-    fun reportSaveFailure() { _error.value = "收听记录保存失败，请检查剩余空间后重试" }
+    fun reportSaveFailure() { _error.value = errorText("library_write_failed") }
 
     fun toggleFavorite(audio: Audio) = action { mutate(audio) { it.copy(favorite = !it.favorite) } }
     fun toggleBookmark(id: String) = action {
@@ -118,6 +119,6 @@ class ListeningLibrary(
     }
     private fun action(block: suspend () -> Unit) = scope.launch {
         try { block() } catch (e: CancellationException) { throw e }
-        catch (_: Exception) { _error.value = "收听记录保存失败，请检查剩余空间后重试" }
+        catch (_: Exception) { _error.value = errorText("library_write_failed") }
     }
 }

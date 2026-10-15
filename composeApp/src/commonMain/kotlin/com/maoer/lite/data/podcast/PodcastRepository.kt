@@ -17,6 +17,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import com.maoer.lite.data.error.*
 
 class PodcastRepository(
     private val client: HttpClient,
@@ -41,11 +42,20 @@ class PodcastRepository(
                 previous?.modified?.let { header(HttpHeaders.IfModifiedSince, it) }
             }.execute { response ->
                 if (response.status == HttpStatusCode.NotModified && previous != null) return@execute previous.feed
-                check(response.status.value in 200..299) { "节目源暂不可用（HTTP ${response.status.value}）" }
+                if (response.status.value !in 200..299) throw AppFailure(when (response.status.value) {
+                    404 -> "rss_not_found"
+                    401, 403 -> "rss_access_denied"
+                    429 -> "rss_rate_limited"
+                    else -> "rss_http_error"
+                }, mapOf("status" to response.status.value))
                 val bytes = response.bodyAsChannel().readRemaining(8_000_001).readBytes()
-                check(bytes.size <= 8_000_000) { "节目源超过 8 MB，请稍后重试" }
-                val feed = withContext(Dispatchers.Default) { parser.parse(bytes.decodeToString(), source) }
-                cache.write(id, CachedFeed(feed, response.headers[HttpHeaders.ETag], response.headers[HttpHeaders.LastModified]))
+                if (bytes.size > 8_000_000) throw AppFailure("rss_too_large")
+                val feed = try { withContext(Dispatchers.Default) { parser.parse(bytes.decodeToString(), source) } }
+                    catch (e: CancellationException) { throw e }
+                    catch (_: Exception) { throw AppFailure("rss_parse_failed") }
+                try { cache.write(id, CachedFeed(feed, response.headers[HttpHeaders.ETag], response.headers[HttpHeaders.LastModified])) }
+                catch (e: CancellationException) { throw e }
+                catch (_: Exception) { throw AppFailure("rss_cache_write_failed") }
                 feed
             }
         }

@@ -3,6 +3,7 @@ import asyncio
 import json
 import secrets
 import re
+import sqlite3
 from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import Field, ValidationError
@@ -36,6 +37,10 @@ def register(app, settings):
     async def conflict(request, exc):
         return JSONResponse({'error': {'code': str(exc)}}, 409)
 
+    @app.exception_handler(sqlite3.Error)
+    async def storage_failure(request, exc):
+        return JSONResponse({'error': {'code': 'server_storage_error'}}, 503)
+
     def public(run): return Store.public(run)
 
     @app.post('/v1/agent/runs')
@@ -44,7 +49,11 @@ def register(app, settings):
         if refusal: return refusal
         try:
             data = NewRun.model_validate(await body(request))
-        except (ValueError, ValidationError, OverflowError, RecursionError, asyncio.TimeoutError):
+        except asyncio.TimeoutError:
+            return JSONResponse({'error': {'code': 'request_timeout'}}, 408)
+        except OverflowError:
+            return JSONResponse({'error': {'code': 'body_too_large'}}, 413)
+        except (ValueError, ValidationError, RecursionError):
             return JSONResponse({'error': {'code': 'invalid_request'}}, 400)
         return public(app.state.agent.create(data))
 
@@ -114,7 +123,11 @@ def register(app, settings):
                 result = value['result']
                 if not isinstance(result, dict) or result.get('status') not in ('ok', 'error', 'unknown', 'accepted'): raise ValueError()
                 if len(json.dumps(result, ensure_ascii=False)) > 12000: raise ValueError()
-        except (KeyError, TypeError, ValueError, OverflowError, RecursionError, asyncio.TimeoutError):
+        except asyncio.TimeoutError:
+            return JSONResponse({'error': {'code': 'request_timeout'}}, 408)
+        except OverflowError:
+            return JSONResponse({'error': {'code': 'body_too_large'}}, 413)
+        except (KeyError, TypeError, ValueError, RecursionError):
             return JSONResponse({'error': {'code': 'invalid_tool_result'}}, 400)
         return public(app.state.agent.submit(run_id, values))
 

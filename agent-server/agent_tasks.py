@@ -5,6 +5,7 @@ from functools import partial
 import logging
 from pathlib import Path
 import time
+import sqlite3
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.types import Command
 from langsmith import tracing_context
@@ -55,16 +56,19 @@ class AgentTasks:
                     value = Command(resume=results)
                 else:
                     self.store.update(run_id, status='completed', calls=[], text=result['messages'][-1].get('content') or '',
-                                      history=last_turn(result['messages']), memory=result.get('memory', {}), error='', retry_after=0)
+                                      history=last_turn(result['messages']), memory=result.get('memory', {}), error='', error_detail={}, phase='', retry_after=0)
                     break
         except asyncio.CancelledError:
             # Explicit cancellation and service shutdown choose their status outside this task.
             raise
         except ModelFailure as exc:
-            self.store.update(run_id, status='failed', calls=[], error=exc.code, retry_after=exc.delay)
+            logging.getLogger('maoer.agent').warning('agent_run=%s phase=%s code=%s details=%s',
+                run_id, self.get_run(run_id).get('phase', 'unknown'), exc.code, exc.details)
+            self.store.update(run_id, status='failed', calls=[], error=exc.code, error_detail=exc.details, retry_after=exc.delay)
         except Exception as exc:
             logging.getLogger('maoer.agent').warning('agent_run=%s failure_type=%s', run_id, type(exc).__name__)
-            self.store.update(run_id, status='failed', calls=[], error='invalid_agent_response')
+            self.store.update(run_id, status='failed', calls=[],
+                              error='server_storage_error' if isinstance(exc, sqlite3.Error) else 'invalid_agent_response', error_detail={})
         finally:
             self.jobs.pop(run_id, None)
 
@@ -140,7 +144,7 @@ class AgentTasks:
             value = Command(resume=[receipts[c['id']] for c in calls])
         elif not snapshot.next:
             raise TaskConflict('task_not_retryable')
-        run = self.store.update(run_id, status='generating', text='', error='', retry_after=0)
+        run = self.store.update(run_id, status='generating', text='', error='', error_detail={}, retry_after=0)
         self.launch(run_id, value)
         return run
 

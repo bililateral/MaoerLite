@@ -7,21 +7,8 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
-ERROR_MESSAGES = {
-    'upstream_rate_limit': '模型服务繁忙或调用受限，请稍后重试。',
-    'upstream_account_rate_limit': '上游账户请求速率受限。',
-    'upstream_overloaded': '上游模型当前繁忙。',
-    'upstream_account_arrears': '上游账户状态受限（欠费），请核查控制台；不会自动重试或切换模型。',
-    'upstream_quota_exhausted': '上游账户余额或额度不足，请在控制台补充额度后重试。',
-    'upstream_account_restricted': '上游账户或套餐权限受限，请核查控制台。',
-    'upstream_rate_limit_unknown': '上游返回 429，但原因无法确认；已停止自动重试。',
-    'local_rate_limit': '发送较频繁，请约一分钟后重试。',
-    'local_busy': '上一条请求还在处理中，请稍后重试。',
-    'upstream_timeout': '模型响应超时，请稍后重试。',
-    'upstream_auth_failed': '模型认证失败，请检查本地配置。',
-    'unauthorized': '本地访问令牌无效，请重新启动客户端。',
-    'invalid_request': '消息过长或格式不正确，请缩短内容或清空对话。',
-}
+from error_messages import error_message
+
 
 RETRY_CODES = {'upstream_account_rate_limit', 'upstream_overloaded', 'local_rate_limit'}
 MAX_ATTEMPTS = 3
@@ -36,7 +23,7 @@ def stream_reply(client, context, sleep=time.sleep, clock=time.monotonic):
         delay = None
         remaining = RETRY_WINDOW_SECONDS - (clock() - started)
         if remaining <= 0:
-            print('本条消息已达到重试时限，请稍后再试。')
+            print(error_message('cli_retry_limit'))
             return '', False
         with client.stream('POST', '/v1/chat/completions',
                            json={'messages': context, 'stream': True}, timeout=min(100, remaining)) as response:
@@ -44,7 +31,9 @@ def stream_reply(client, context, sleep=time.sleep, clock=time.monotonic):
                 data = json.loads(response.read())
                 failure = data.get('error', {})
                 code = failure.get('code', '')
-                print(ERROR_MESSAGES.get(code, '请求未完成，请稍后重试。'))
+                detail = failure.get('detail', {})
+                shown = 'model_timeout_' + detail.get('timeout_kind', 'unknown') if code == 'upstream_timeout' and detail else code
+                print(error_message(shown, seconds=detail.get('total_limit_seconds'), status=failure.get('http_status')))
                 delay = failure.get('retry_after')
                 can_retry = (response.status_code == 429 and code in RETRY_CODES
                              and failure.get('retryable') is True and type(delay) is int and delay > 0)
@@ -52,7 +41,7 @@ def stream_reply(client, context, sleep=time.sleep, clock=time.monotonic):
                     return '', False
                 if (attempt + 1 >= MAX_ATTEMPTS or waited + delay > MAX_WAIT_SECONDS
                         or clock() - started + delay >= RETRY_WINDOW_SECONDS):
-                    print(f'已停止自动重试，请至少 {delay} 秒后再试（Ctrl+C 可退出）。')
+                    print(error_message('cli_retry_stopped', seconds=delay))
                     return '', False
                 source = failure.get('retry_after_source')
                 label = {'upstream': '上游提示', 'upstream_and_local_backoff': '上游提示及本地退避',
@@ -70,13 +59,15 @@ def stream_reply(client, context, sleep=time.sleep, clock=time.monotonic):
                         return reply, bool(reply)
                     event = json.loads(data)
                     if 'error' in event:
-                        print('\n响应中断，请重试。')
+                        failure = event['error']; detail = failure.get('detail', {}); code = failure.get('code', 'stream_interrupted')
+                        shown = 'model_timeout_' + detail.get('timeout_kind', 'unknown') if code == 'upstream_timeout' and detail else code
+                        print('\n' + error_message(shown, seconds=detail.get('total_limit_seconds')))
                         return reply, False
                     for choice in event.get('choices', []):
                         text = choice.get('delta', {}).get('content') or ''
                         reply += text
                         print(text, end='', flush=True)
-                print('\n响应未完整结束，请重试。')
+                print('\n' + error_message('cli_stream_incomplete'))
                 return reply, False
         # Release the response/connection before waiting. KeyboardInterrupt is
         # intentionally propagated to main; an interrupted stream is never replayed.

@@ -1,4 +1,5 @@
 """Server-side read-only tools with a hard, persistent free-credit budget."""
+from error_messages import error_message
 import asyncio
 import logging
 import math
@@ -51,13 +52,13 @@ class ResearchTools:
                 try: delay = max(1, math.ceil(parsedate_to_datetime(raw).timestamp() - time.time()))
                 except (ValueError, TypeError, OverflowError): pass
             self.store.save_state(cache_key + ':cooldown', {'until': time.time() + delay, 'phase': phase})
-            return self.web_failure('web_rate_limited', f'联网服务请求过于频繁，需等待约{delay}秒后再试。请停止本轮联网调用，换搜索词不能解除限流；这不代表免费额度已用完或网络无法连接。', phase, status, delay)
+            return self.web_failure('web_rate_limited', error_message('web_rate_limited', seconds=delay), phase, status, delay)
         if status in (401, 403):
-            return self.web_failure('web_auth_failed', '联网服务拒绝当前访问凭据，请检查服务端配置；本轮不要重复联网调用。', phase, status)
+            return self.web_failure('web_auth_failed', error_message('web_auth_failed'), phase, status)
         if status in (432, 433):
             self.store.save_state(cache_key + ':limit', {'month': datetime.now(timezone.utc).strftime('%Y-%m'), 'status': status})
-            return self.web_failure('web_quota_exhausted', '联网服务额度已达上限，本轮停止查询，不切换付费方案。', phase, status)
-        return self.web_failure('web_service_error', f'联网服务返回HTTP {status}，本次未取得资料；不要将它解释为地区不可用。', phase, status)
+            return self.web_failure('web_quota_exhausted', error_message('web_quota_exhausted'), phase, status)
+        return self.web_failure('web_service_error', error_message('web_service_error', status=status), phase, status)
 
     def monitor_usage(self, cache_key, headers):
         """Account telemetry is advisory; its availability never gates a search."""
@@ -101,7 +102,7 @@ class ResearchTools:
 
     async def tavily(self, endpoint, payload, request_id):
         if not self.settings.tavily_key:
-            return {'status': 'error', 'code': 'web_not_configured', 'note': '联网搜索尚未配置，不能核实最新信息。'}
+            return {'status': 'error', 'code': 'web_not_configured', 'note': error_message('web_not_configured')}
         # Only these fixed-cost basic operations are permitted, regardless of caller.
         payload = dict(payload)
         if endpoint == 'search':
@@ -109,7 +110,7 @@ class ResearchTools:
         elif endpoint == 'extract' and len(payload.get('urls', [])) == 1:
             payload['extract_depth'] = 'basic'
         else:
-            return {'status': 'error', 'code': 'web_operation_not_allowed', 'note': '仅允许基础搜索或单页基础正文读取。'}
+            return {'status': 'error', 'code': 'web_operation_not_allowed', 'note': error_message('web_operation_not_allowed')}
         headers = {'Authorization': 'Bearer ' + self.settings.tavily_key}
         cache_key = 'web:' + digest(self.settings.tavily_key)
         async with self.web_lock:
@@ -121,31 +122,42 @@ class ResearchTools:
                 if cooldown.get('phase') != 'usage' and cooldown.get('until', 0) > now:
                     delay = math.ceil(cooldown['until'] - now)
                     return {'status': 'error', 'code': 'web_rate_limited', 'phase': cooldown.get('phase', endpoint),
-                            'retry_after': delay, 'note': f'联网搜索仍在限流冷却中，约{delay}秒后可再试。本轮停止联网调用，不要换词重试。'}
+                            'retry_after': delay, 'note': error_message('web_rate_limited', seconds=delay)}
                 month = datetime.now(timezone.utc).strftime('%Y-%m')
                 if self.store.state(cache_key + ':policy').get('paid'):
-                    return self.web_failure('web_paid_plan_blocked', '搜索账户已核实存在付费配置，已停止调用；请使用免费账户并关闭按量付费。', endpoint)
+                    return self.web_failure('web_paid_plan_blocked', error_message('web_paid_plan_blocked'), endpoint)
                 if self.store.state(cache_key + ':limit').get('month') == month:
-                    return self.web_failure('web_quota_exhausted', '搜索服务已报告本月额度上限，停止调用，不切换付费方案。', endpoint)
+                    return self.web_failure('web_quota_exhausted', error_message('web_quota_exhausted'), endpoint)
                 quota = self.store.state(cache_key + ':quota')
                 if quota.get('month') == month and quota['remaining'] - max(0, self.store.credits(month) - quota['reserved']) < 1:
-                    return self.web_failure('web_quota_exhausted', '已核实的免费搜索额度不足，本轮停止调用，不会转为付费。', endpoint)
+                    return self.web_failure('web_quota_exhausted', error_message('web_quota_exhausted'), endpoint)
                 # No usage response is required: the configured free account supplies
                 # the provider-side hard cap; this independent ledger is conservative.
                 if not self.store.reserve(request_id, month, min(950, max(0, self.settings.web_monthly_limit))):
-                    return self.web_failure('web_reservation_denied', '本地免费搜索预算已用完或上次请求结果不确定；未重复请求。', endpoint)
+                    code = 'web_request_recorded' if self.store.reserved(request_id) else 'web_budget_exhausted'
+                    return self.web_failure(code, error_message(code), endpoint)
                 response = await self.client.post('https://api.tavily.com/' + endpoint, headers=headers, json=payload, timeout=35)
                 if not response.is_success: return self.http_failure(response, endpoint, cache_key)
-                return response.json()
-            except httpx.TimeoutException:
-                return self.web_failure('web_timeout', '服务器连接联网服务或等待响应超时，本次未取得资料。', endpoint)
+                data = response.json()
+                if not isinstance(data, dict) or not isinstance(data.get('results'), list):
+                    raise ValueError('invalid_web_results')
+                fields = ('url', 'title', 'content') if endpoint == 'search' else ('raw_content',)
+                if any(not isinstance(row, dict) or any(not isinstance(row.get(key, ''), str) for key in fields)
+                       or not isinstance(row.get('published_date') or '', str) for row in data['results']):
+                    raise ValueError('invalid_web_result_fields')
+                return data
+            except httpx.TimeoutException as exc:
+                code = ('web_timeout_connect' if isinstance(exc, httpx.ConnectTimeout) else
+                        'web_timeout_write' if isinstance(exc, httpx.WriteTimeout) else
+                        'web_timeout_pool' if isinstance(exc, httpx.PoolTimeout) else 'web_timeout_read')
+                return self.web_failure(code, error_message(code), endpoint)
             except httpx.RequestError:
-                return self.web_failure('web_connection_failed', '服务器到联网服务的连接失败，本次未取得资料。', endpoint)
+                return self.web_failure('web_connection_failed', error_message('web_connection_failed'), endpoint)
             except (ValueError, KeyError, TypeError):
-                return self.web_failure('web_invalid_response', '联网服务返回格式无法处理，本次未取得可用资料。', endpoint)
+                return self.web_failure('web_invalid_response', error_message('web_invalid_response'), endpoint)
             except Exception as exc:
                 logging.getLogger('maoer.agent').warning('web_internal_failure type=%s', type(exc).__name__)
-                return self.web_failure('web_internal_error', '联网工具内部处理失败，本次未取得可用资料。', endpoint)
+                return self.web_failure('web_internal_error', error_message('web_internal_error'), endpoint)
 
     async def perform(self, call, run):
         name, args = call['name'], call['arguments']
@@ -172,7 +184,7 @@ class ResearchTools:
         known = {s.get('source_url') for s in run.get('sources', [])}
         question = run.get('input', {}).get('message', '')
         if not public_url(url) or (url not in known and url not in question):
-            return {'status': 'error', 'note': '只能读取已检索到或用户明确提供的公开网页链接。'}
+            return {'status': 'error', 'code': 'web_url_not_allowed', 'note': error_message('web_url_not_allowed')}
         saved = next((s for s in run.get('sources', []) if s.get('source_url') == url and s.get('document_id')), None)
         raw = self.store.read(saved['document_id']) if saved else ''
         if not raw:
@@ -180,9 +192,9 @@ class ResearchTools:
                                                  'include_images': False}, request_id)
             if result.get('status') == 'error': return result
             rows = result.get('results', [])
-            if not rows: return {'status': 'error', 'note': '网页正文读取失败，没有取得原文。'}
+            if not rows: return {'status': 'error', 'code': 'web_extract_failed', 'note': error_message('web_extract_failed')}
             raw = rows[0].get('raw_content', '')
-        if not raw: return {'status': 'error', 'note': '网页正文为空，没有取得原文。'}
+        if not raw: return {'status': 'error', 'code': 'web_body_empty', 'note': error_message('web_body_empty')}
         title = next((s['title'] for s in run.get('sources', []) if s.get('source_url') == url), urlsplit(url).hostname)
         text = raw[:200000]
         document_id = self.store.document(text)

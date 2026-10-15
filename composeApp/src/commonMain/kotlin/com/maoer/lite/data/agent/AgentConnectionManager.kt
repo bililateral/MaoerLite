@@ -1,5 +1,7 @@
 package com.maoer.lite.data.agent
 
+import com.maoer.lite.data.error.errorText
+import com.maoer.lite.data.error.AppFailure
 import kotlinx.coroutines.*
 
 /** Connection validation and persistence; the session owns UI state and admission. */
@@ -8,7 +10,7 @@ internal class AgentConnectionManager(private val storage: AgentStorage, private
         value.validationError()?.let { throw IllegalArgumentException(it) }
         val url = agentServiceUrl(value.url)
         value.ssh?.validate()
-        if (value.ssh != null) require(url.startsWith("http://")) { "SSH 隧道内请填写 http:// 开头的服务地址。" }
+        if (value.ssh != null) require(url.startsWith("http://")) { errorText("ssh_target_invalid") }
         require(value.token.length >= 32 && value.token.all { it.code in 33..126 })
         val normalized = value.copy(url = url)
         val turn = history.turns.lastOrNull()
@@ -17,7 +19,7 @@ internal class AgentConnectionManager(private val storage: AgentStorage, private
         history.requireRecoverableConnection(remote)
         try { storage.saveConnection(normalized) }
         catch (e: CancellationException) { throw e }
-        catch (_: Exception) { throw IllegalStateException("连接验证成功，但手机未能保存配置，请检查设备安全存储后重试。") }
+        catch (_: Exception) { throw AppFailure("connection_save_failed") }
         withContext(NonCancellable + Dispatchers.IO) { runCatching { api.closeConnection() } }
         return pending
     }

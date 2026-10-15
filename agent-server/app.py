@@ -16,6 +16,7 @@ from config import ROOT, Settings
 from protocol import ChatRequest, public_response
 from rate_limit import Throttle, upstream_failure_code
 from model_gate import Gate
+from failure_details import timeout_kind
 from upstream_io import MAX_BODY, TOTAL_TIMEOUT, read_request, connected_operation, limited_upstream, sse_data
 
 LOG = logging.getLogger('maoer.agent')
@@ -121,7 +122,7 @@ def create_app(settings: Settings, transport=None, agent_db=None):
                     outcome = result.code
                     return error(429, outcome, request_id, **result.details(), cooldown=False)
                 outcome = result
-                return error(502, outcome, request_id)
+                return error(502, outcome, request_id, http_status=response.status_code)
             headers = {'X-Request-Id': request_id, 'Cache-Control': 'no-store'}
             if not payload.stream:
                 if not result.get('choices'):
@@ -132,8 +133,10 @@ def create_app(settings: Settings, transport=None, agent_db=None):
 
             async def events():
                 nonlocal outcome
+                received = False
                 try:
                     async for data in sse_data(response, started + TOTAL_TIMEOUT):
+                        received = True
                         if data == '[DONE]':
                             outcome = 'ok_stream'
                             gate.limiter.reset()
@@ -145,24 +148,37 @@ def create_app(settings: Settings, transport=None, agent_db=None):
                 except asyncio.CancelledError:
                     outcome = 'cancelled'
                     raise
-                except Exception:
-                    outcome = 'stream_interrupted'
-                    yield ('event: error\ndata: ' + json.dumps({'error': {'code': outcome, 'request_id': request_id}}) + '\n\n').encode()
+                except Exception as exc:
+                    timed_out = isinstance(exc, (httpx.TimeoutException, asyncio.TimeoutError))
+                    outcome = 'upstream_timeout' if timed_out else 'stream_interrupted'
+                    detail = {'timeout_kind': timeout_kind(exc, True, received), 'total_limit_seconds': TOTAL_TIMEOUT} if timed_out else {}
+                    yield ('event: error\ndata: ' + json.dumps({'error': {'code': outcome, 'request_id': request_id, 'detail': detail}}) + '\n\n').encode()
                 finally:
                     await finish()
 
             headers['X-Accel-Buffering'] = 'no'
             streaming = True
             return StreamingResponse(events(), media_type='text/event-stream', headers=headers)
-        except (asyncio.TimeoutError, httpx.TimeoutException):
+        except (asyncio.TimeoutError, httpx.TimeoutException) as exc:
             outcome = 'upstream_timeout'
-            return error(504, outcome, request_id)
+            return error(504, outcome, request_id, detail={'timeout_kind': timeout_kind(exc, response is not None),
+                         'elapsed_ms': round((time.monotonic() - started) * 1000), 'total_limit_seconds': TOTAL_TIMEOUT})
         except (asyncio.CancelledError, ConnectionAbortedError):
             outcome = 'cancelled'
             raise
-        except Exception:
+        except httpx.ConnectError:
+            outcome = 'upstream_connect_failed'
+            return error(502, outcome, request_id)
+        except httpx.HTTPError:
             outcome = 'upstream_unavailable'
             return error(502, outcome, request_id)
+        except (ValueError, TypeError, KeyError):
+            outcome = 'invalid_model_response'
+            return error(502, outcome, request_id)
+        except Exception as exc:
+            outcome = 'invalid_agent_response'
+            LOG.warning('request=%s failure_type=%s', request_id, type(exc).__name__)
+            return error(500, outcome, request_id)
         finally:
             if not streaming:
                 await finish()

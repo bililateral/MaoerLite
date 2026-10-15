@@ -1,5 +1,6 @@
 package com.maoer.lite.data.download
 
+import com.maoer.lite.data.error.errorText
 import android.app.DownloadManager
 import android.content.Context
 import android.net.Uri
@@ -17,6 +18,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okio.ByteString.Companion.encodeUtf8
 import java.io.File
+import com.maoer.lite.data.error.*
 
 /** Android owns transfers across UI/process lifetimes; common code owns source policy and display state. */
 class AndroidDownloads(private val storage: KeyValueStorage,
@@ -41,13 +43,13 @@ class AndroidDownloads(private val storage: KeyValueStorage,
                 delay(1500)
                 try {
                     refresh()
-                    if (_error.value == "下载状态暂不可用，正在重试") _error.value = null
+                    if (_error.value == errorText("download_status_unavailable")) _error.value = null
                 } catch (e: CancellationException) { throw e }
-                catch (_: Exception) { _error.value = "下载状态暂不可用，正在重试" }
+                catch (_: Exception) { _error.value = errorText("download_status_unavailable") }
             }
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
-            _error.value = "下载记录读取失败，请重新打开应用"
+            _error.value = errorText("download_records_read_failed")
             loaded.completeExceptionally(e)
         }
     } }
@@ -58,7 +60,7 @@ class AndroidDownloads(private val storage: KeyValueStorage,
         ?.localUri?.takeIf { uri -> Uri.parse(uri).let { it.scheme == "file" && File(it.path.orEmpty()).isFile } }
 
     override fun enqueue(audio: Audio) { action {
-        check(DownloadPolicy.allowed(audio, sources)) { "此节目暂不提供离线下载" }
+        if (!DownloadPolicy.allowed(audio, sources)) throw AppFailure("download_policy_blocked")
         awaitReady()
         mutex.withLock {
             val old = _items.value.find { it.audio.id == audio.id }
@@ -86,7 +88,7 @@ class AndroidDownloads(private val storage: KeyValueStorage,
     private suspend fun refresh() = mutex.withLock {
         val updated = _items.value.map { item ->
             manager.query(DownloadManager.Query().setFilterById(item.requestId)).use { cursor ->
-                if (!cursor.moveToFirst()) item.copy(status = DownloadStatus.FAILED, localUri = null, message = "文件已移除，可重新下载")
+                if (!cursor.moveToFirst()) item.copy(status = DownloadStatus.FAILED, localUri = null, message = errorText("download_removed"))
                 else {
                     fun long(column: String) = cursor.getLong(cursor.getColumnIndexOrThrow(column))
                     var status = when (long(DownloadManager.COLUMN_STATUS).toInt()) {
@@ -97,10 +99,16 @@ class AndroidDownloads(private val storage: KeyValueStorage,
                         else -> DownloadStatus.QUEUED
                     }
                     val uri = cursor.getString(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI))
-                    if (status == DownloadStatus.COMPLETE && (uri == null || !File(Uri.parse(uri).path.orEmpty()).isFile)) status = DownloadStatus.FAILED
+                    val missing = status == DownloadStatus.COMPLETE && (uri == null || !File(Uri.parse(uri).path.orEmpty()).isFile)
+                    if (missing) status = DownloadStatus.FAILED
                     item.copy(status = status, bytes = long(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR).coerceAtLeast(0),
                         total = long(DownloadManager.COLUMN_TOTAL_SIZE_BYTES), localUri = uri.takeIf { status == DownloadStatus.COMPLETE },
-                        message = if (status == DownloadStatus.FAILED) "下载失败或文件缺失，可重试（${long(DownloadManager.COLUMN_REASON)}）" else null)
+                        message = when {
+                            missing -> errorText("download_file_missing")
+                            status == DownloadStatus.FAILED -> downloadFailureMessage(long(DownloadManager.COLUMN_REASON).toInt())
+                            status == DownloadStatus.WAITING -> downloadWaitingMessage(long(DownloadManager.COLUMN_REASON).toInt())
+                            else -> null
+                        })
                 }
             }
         }
@@ -112,7 +120,7 @@ class AndroidDownloads(private val storage: KeyValueStorage,
     }
     private fun action(block: suspend () -> Unit) { scope.launch {
         try { _error.value = null; block() } catch (e: CancellationException) { throw e }
-        catch (e: Exception) { _error.value = e.message ?: "下载操作失败，请检查网络与剩余空间" }
+        catch (e: Exception) { _error.value = failureText(e, "download_operation_failed") }
     } }
     companion object { const val KEY = "offline_downloads_v1" }
 }

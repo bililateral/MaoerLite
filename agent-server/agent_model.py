@@ -2,16 +2,19 @@
 import asyncio
 import json
 import time
+import logging
 import httpx
 from pydantic import Field, model_validator
 from protocol import ChatRequest, Message
 from rate_limit import Throttle, upstream_failure_code
 from upstream_io import limited_upstream, sse_data, TOTAL_TIMEOUT
+from failure_details import timeout_kind
 
 
 class ModelFailure(Exception):
-    def __init__(self, code, retryable=False, delay=0):
+    def __init__(self, code, retryable=False, delay=0, details=None):
         self.code, self.retryable, self.delay = code, retryable, delay
+        self.details = details or {}
         super().__init__(code)
 
 
@@ -33,9 +36,12 @@ class AgentChatRequest(ChatRequest):
 
 
 async def generate(settings, messages, tools, publish, *, client, gate):
-    payload = AgentChatRequest.model_validate({'messages': messages, 'tools': tools or None,
-                                              'tool_choice': 'auto' if tools else None,
-                                              'stream': True, 'max_tokens': 8192 if settings.agent_thinking else 4096})
+    try:
+        payload = AgentChatRequest.model_validate({'messages': messages, 'tools': tools or None,
+                                                  'tool_choice': 'auto' if tools else None,
+                                                  'stream': True, 'max_tokens': 8192 if settings.agent_thinking else 4096})
+    except ValueError:
+        raise ModelFailure('invalid_model_request') from None
     body = payload.upstream_body(settings)
     if settings.agent_thinking:
         body['thinking'] = {'type': 'enabled'}
@@ -56,12 +62,23 @@ async def generate(settings, messages, tools, publish, *, client, gate):
     response = None
     started = time.monotonic()
     text, reasoning, calls = '', '', {}
+    first_data = None
+    headers_at = None
+    last_data = started
+    def details():
+        return {'elapsed_ms': round((time.monotonic() - started) * 1000),
+                'headers_ms': None if headers_at is None else round((headers_at - started) * 1000),
+                'first_data_ms': None if first_data is None else round((first_data - started) * 1000),
+                'idle_ms': round((time.monotonic() - last_data) * 1000),
+                'response_stage': 'answer' if text else 'tool_call' if calls else 'reasoning' if reasoning else 'waiting',
+                'total_limit_seconds': TOTAL_TIMEOUT}
     try:
         async def read():
-            nonlocal response, text, reasoning
+            nonlocal response, text, reasoning, headers_at, first_data, last_data
             request = client.build_request('POST', settings.endpoint,
                 headers={'Authorization': 'Bearer ' + settings.api_key}, json=body)
             response = await client.send(request, stream=True)
+            headers_at = time.monotonic()
             if response.status_code == 429:
                 try:
                     data = await limited_upstream(response, 16384)
@@ -74,9 +91,11 @@ async def generate(settings, messages, tools, publish, *, client, gate):
                     data = await limited_upstream(response, 16384)
                 except (ValueError, UnicodeError, httpx.HTTPError):
                     data = {}
-                raise ModelFailure(upstream_failure_code(response.status_code, data))
+                raise ModelFailure(upstream_failure_code(response.status_code, data), details={'http_status': response.status_code})
             finish = None
             async for raw in sse_data(response, started + TOTAL_TIMEOUT):
+                last_data = time.monotonic()
+                if first_data is None: first_data = last_data
                 if raw == '[DONE]':
                     if finish not in ('stop', 'tool_calls') or (not text and not calls):
                         raise ModelFailure('incomplete_model_response')
@@ -113,11 +132,20 @@ async def generate(settings, messages, tools, publish, *, client, gate):
                             raise ModelFailure('invalid_tool_call')
             raise ModelFailure('stream_interrupted')
         return await asyncio.wait_for(read(), TOTAL_TIMEOUT)
-    except (httpx.TimeoutException, asyncio.TimeoutError):
-        raise ModelFailure('upstream_timeout') from None
+    except ModelFailure as exc:
+        exc.details = {**details(), **exc.details}
+        raise
+    except (httpx.TimeoutException, asyncio.TimeoutError) as exc:
+        raise ModelFailure('upstream_timeout', details={**details(), 'timeout_kind':
+            timeout_kind(exc, response is not None, first_data is not None)}) from None
+    except httpx.ConnectError:
+        raise ModelFailure('upstream_connect_failed', details=details()) from None
     except httpx.HTTPError:
-        raise ModelFailure('upstream_unavailable') from None
+        raise ModelFailure('upstream_unavailable', details=details()) from None
+    except (ValueError, TypeError, KeyError, AttributeError):
+        raise ModelFailure('invalid_model_response', details=details()) from None
     finally:
+        logging.getLogger('maoer.agent').info('model_timing %s', json.dumps(details()))
         try:
             if response is not None: await response.aclose()
         finally:

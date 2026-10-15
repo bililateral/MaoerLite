@@ -83,7 +83,7 @@ object AgentScreen : Screen {
                         last?.status == "awaiting_tools" -> if (last.batch_total > 1)
                             "正在执行手机操作 ${last.batch_completed + 1}/${last.batch_total}" else "正在执行手机操作"
                         state.working -> "正在回复…"
-                        last?.status == "failed" -> agentError(last.error)
+                        last?.status == "failed" -> agentError(last)
                         last?.status == "cancelled" -> "已停止；已执行的操作保持实际状态"
                         !state.connected -> "请通过右上角设置连接服务"
                         else -> ""

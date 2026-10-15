@@ -1,5 +1,6 @@
 package com.maoer.lite.data.agent
 
+import com.maoer.lite.data.error.errorText
 import com.maoer.lite.data.podcast.PodcastRepository
 import com.maoer.lite.data.podcast.PodcastSearchIndex
 import kotlinx.serialization.json.*
@@ -48,7 +49,7 @@ internal class CatalogToolHandler(private val repository: PodcastRepository) {
                 val feed = repository.refresh(id)
                 episodeSelection(feed, args)
             }
-            else -> agentToolError("不支持此工具。")
+            else -> agentToolError(errorText("tool_unsupported"))
         }
     }
     companion object {

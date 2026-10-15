@@ -30,6 +30,10 @@ def upstream_failure_code(status, data):
     code = error.get('code') if isinstance(error, dict) else None
     if status == 402 or (isinstance(code, str) and code in QUOTA_CODES):
         return 'upstream_quota_exhausted'
+    if status == 504: return 'upstream_gateway_timeout'
+    if status in (500, 502, 503): return 'upstream_service_error'
+    if status == 404: return 'upstream_endpoint_not_found'
+    if status in (400, 413, 422): return 'upstream_request_rejected'
     return 'upstream_auth_failed' if status in (401, 403) else 'upstream_error'
 
 

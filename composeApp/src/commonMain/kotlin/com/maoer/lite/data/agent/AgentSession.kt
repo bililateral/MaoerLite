@@ -1,6 +1,8 @@
 package com.maoer.lite.data.agent
 
+import com.maoer.lite.data.error.errorText
 import io.ktor.utils.io.errors.IOException
+import com.maoer.lite.data.error.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
@@ -25,7 +27,8 @@ class AgentSession(private val storage: AgentStorage, private val api: AgentApi,
             mutable.value = AgentUiState(history, ready = true, connected = storage.connection().token.isNotBlank(),
                                         personalizedSearch = storage.personalizedSearch())
         }
-        catch (_: Exception) { mutable.value = mutable.value.copy(ready = false, notice = "本地助手记录无法读取，原文件已保留，请先修复本地记录。") }
+        catch (e: CancellationException) { throw e }
+        catch (e: Exception) { mutable.value = mutable.value.copy(ready = false, notice = agentFailureMessage(e)) }
     } }
     suspend fun connection() = storage.connection()
     suspend fun sourceText(run: String, number: Int) = api.sourceText(run, number)
@@ -37,15 +40,16 @@ class AgentSession(private val storage: AgentStorage, private val api: AgentApi,
                 if (!value) save(mutable.value.history.copy(turns = mutable.value.history.turns.map {
                     it.copy(run = it.run?.copy(search_hint = ""))
                 }))
-            } catch (_: Exception) { mutable.value = mutable.value.copy(notice = "搜索推荐设置保存失败，请重试") }
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { mutable.value = mutable.value.copy(notice = errorText("hint_save_failed")) }
         }
     }
     private fun capabilities() = listOf("episode_selection_v2", "research_v3") +
         if (mutable.value.personalizedSearch) listOf("search_hints") else emptyList()
     suspend fun probeSsh(value: AgentSshConfig) = api.probeSsh(value)
     suspend fun configure(value: AgentConnection) = withContext(Dispatchers.Main) {
-        check(!configuring && !mutable.value.working) { "助手正在处理请求，请停止后再修改连接。" }
-        check(mutable.value.ready) { "本地助手记录尚未加载，请稍后重试。" }
+        if (configuring || mutable.value.working) throw AppFailure("configuration_busy")
+        if (!mutable.value.ready) throw AppFailure("local_records_loading")
         configuring = true
         try {
             val pending = connections.configure(value, mutable.value.history)
@@ -63,7 +67,7 @@ class AgentSession(private val storage: AgentStorage, private val api: AgentApi,
         save(h.copy(turns = h.turns.map { if (it.id == run.id) it.copy(run = visible) else it }))
     }
     private fun failureNotice(reason: String) {
-        val prefix = if (mutable.value.history.deletePending) "旧对话删除尚未确认，请重试删除。" else ""
+        val prefix = if (mutable.value.history.deletePending) errorText("delete_pending_notice") else ""
         mutable.value = mutable.value.copy(notice = prefix + reason)
     }
     private fun work(block: suspend () -> Unit) {
@@ -72,10 +76,7 @@ class AgentSession(private val storage: AgentStorage, private val api: AgentApi,
         job = scope.launch {
             try { block() }
             catch (e: CancellationException) { throw e }
-            catch (e: AgentApiException) { failureNotice(agentError(e.code)) }
-            catch (e: AgentTransportException) { failureNotice(agentError(e.code)) }
-            catch (_: IOException) { failureNotice("连接已中断，请检查网络或 VPN 后点击恢复连接；SSH 模式会重新建立隧道并继续原任务。") }
-            catch (_: Exception) { failureNotice(if (mutable.value.history.deletePending) "请检查连接或本地存储后重试。" else "连接已中断，恢复连接会继续当前任务，不会重新执行已记录操作。") }
+            catch (e: Exception) { failureNotice(agentFailureMessage(e)) }
             finally { api.closeConnection(); mutable.value = mutable.value.copy(working = false) }
         }
     }
@@ -130,7 +131,7 @@ class AgentSession(private val storage: AgentStorage, private val api: AgentApi,
                 run = api.results(run.id, receipts)
             } else {
                 api.events(run.id) { value -> run = value; update(value) }
-                if (!run.terminal && run.status != "awaiting_tools") throw IllegalStateException("stream ended")
+                if (!run.terminal && run.status != "awaiting_tools") throw AppFailure("service_stream_ended")
             }
         }
     }
@@ -144,7 +145,8 @@ class AgentSession(private val storage: AgentStorage, private val api: AgentApi,
                 activeJob?.join()
                 save(mutable.value.history.copy(cancelPending = id))
                 reconnect()
-            } catch (_: Exception) { mutable.value = mutable.value.copy(notice = "停止状态保存失败，当前客户端已停止派发操作。") }
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { mutable.value = mutable.value.copy(notice = errorText("stop_save_failed")) }
         }
     }
     fun newConversation() {

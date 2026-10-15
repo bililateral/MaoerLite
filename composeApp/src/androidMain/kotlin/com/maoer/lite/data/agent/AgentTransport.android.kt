@@ -14,6 +14,21 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.security.MessageDigest
+import java.net.UnknownHostException
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+
+internal fun sshFailureCode(error: Throwable?, forwarding: Boolean = false): String {
+    val causes = generateSequence(error) { it.cause?.takeUnless { next -> next === it } }.take(8).toList()
+    return when {
+        forwarding -> "ssh_forward_failed"
+        causes.any { it is UnknownHostException } -> "ssh_dns_failed"
+        causes.any { it is ConnectException } -> "ssh_connect_refused"
+        causes.any { it is SocketTimeoutException } || error?.message?.contains("timeout", true) == true || error?.message?.contains("timed out", true) == true -> "ssh_timeout"
+        error?.message?.contains("Auth fail", true) == true -> "ssh_auth_failed"
+        else -> "ssh_connection_failed"
+    }
+}
 
 actual class AgentTransport actual constructor() {
     private val lock = Mutex()
@@ -32,11 +47,13 @@ actual class AgentTransport actual constructor() {
             val pin = PinnedHostKey(ssh.fingerprint)
             val next = newSession(ssh, pin)
             session = next
+            var forwarding = false
             try {
                 next.setPassword(ssh.password.toByteArray(Charsets.UTF_8))
                 next.connect(10_000)
                 currentCoroutineContext().ensureActive()
                 if (session !== next) throw AgentTransportException("ssh_connection_failed")
+                forwarding = true
                 localPort = next.setPortForwardingL("127.0.0.1", 0, target.host, target.port)
                 if (session !== next) throw AgentTransportException("ssh_connection_failed")
                 profile = connection
@@ -47,8 +64,7 @@ actual class AgentTransport actual constructor() {
                 currentCoroutineContext().ensureActive()
                 throw AgentTransportException(when {
                     pin.seen != null && pin.seen != ssh.fingerprint -> "ssh_host_key_changed"
-                    e.message?.contains("Auth fail", ignoreCase = true) == true -> "ssh_auth_failed"
-                    else -> "ssh_connection_failed"
+                    else -> sshFailureCode(e, forwarding)
                 })
             }
         }
@@ -60,9 +76,9 @@ actual class AgentTransport actual constructor() {
         val probe = newSession(ssh, pin)
         try {
             // Strict checking rejects the untrusted key before password authentication.
-            runCatching { probe.connect(10_000) }
+            val attempt = runCatching { probe.connect(10_000) }
             currentCoroutineContext().ensureActive()
-            pin.seen ?: throw AgentTransportException("ssh_connection_failed")
+            pin.seen ?: throw AgentTransportException(sshFailureCode(attempt.exceptionOrNull()))
         } finally { probe.disconnect() }
     }
 

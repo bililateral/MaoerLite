@@ -1,4 +1,6 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import groovy.json.JsonSlurper
+import groovy.json.JsonOutput
 
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
@@ -6,6 +8,35 @@ plugins {
     alias(libs.plugins.composeMultiplatform) // 对应 TOML 中的 composeMultiplatform
     alias(libs.plugins.composeCompiler)
     alias(libs.plugins.kotlinSerialization)
+}
+
+abstract class GenerateErrorCatalog : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val catalog: RegularFileProperty
+    @get:OutputDirectory
+    abstract val destination: DirectoryProperty
+
+    @TaskAction
+    fun generate() {
+        @Suppress("UNCHECKED_CAST")
+        val entries = JsonSlurper().parse(catalog.get().asFile) as Map<String, String>
+        require(entries.isNotEmpty() && entries.all { (key, value) -> key.matches(Regex("[a-z][a-z0-9_]*")) && value.isNotBlank() })
+        fun literal(value: String) = JsonOutput.toJson(value).replace("$", "\\$")
+        val target = destination.get().file("com/maoer/lite/data/error/GeneratedErrorCatalog.kt").asFile
+        target.parentFile.mkdirs()
+        target.writeText("// Generated from agent-server/error_catalog.json. Do not edit.\n" +
+            "package com.maoer.lite.data.error\n\ninternal val errorMessages: Map<String, String> = mapOf(\n" +
+            entries.entries.joinToString(",\n") { (key, value) -> "    ${literal(key)} to ${literal(value)}" } + "\n)\n")
+    }
+}
+val generatedErrors = layout.buildDirectory.dir("generated/errorCatalog/kotlin")
+val generateErrorCatalog by tasks.registering(GenerateErrorCatalog::class) {
+    catalog.set(rootProject.layout.projectDirectory.file("agent-server/error_catalog.json"))
+    destination.set(generatedErrors)
+}
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask<*>>().configureEach {
+    dependsOn(generateErrorCatalog)
 }
 
 kotlin {
@@ -29,6 +60,7 @@ kotlin {
     }
 
     sourceSets {
+        commonMain.get().kotlin.srcDir(generatedErrors)
         commonMain.dependencies {
             implementation("io.github.pdvrieze.xmlutil:core:0.86.3")
             implementation("com.squareup.okio:okio:3.9.1")

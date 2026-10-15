@@ -1,5 +1,6 @@
 package com.maoer.lite.ui.agent
 
+import com.maoer.lite.data.error.errorText
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -80,7 +81,7 @@ internal fun AgentSources(run: AgentRun, session: AgentSession, selected: Int?, 
                                 TextButton(onClick = { detail = source }) { Text("查看原文") }
                             val url = source.text("original_url").ifBlank { source.text("source_url") }
                             if (url.startsWith("https://") || url.startsWith("http://"))
-                                TextButton(onClick = { runCatching { uri.openUri(url) }.onFailure { linkError = "无法打开来源链接，请检查浏览器" } }) {
+                                TextButton(onClick = { runCatching { uri.openUri(url) }.onFailure { linkError = errorText("source_link_failed") } }) {
                                     Text(if (source.text("kind") == "episode" && source.text("original_url").isBlank()) "打开 RSS 来源" else "打开原网页")
                                 }
                         }
@@ -104,7 +105,7 @@ internal fun AgentSources(run: AgentRun, session: AgentSession, selected: Int?, 
         LaunchedEffect(source) {
             try { result = session.sourceText(run.id, source.getValue("number").jsonPrimitive.int) }
             catch (e: CancellationException) { throw e }
-            catch (_: Exception) { error = "原文暂时无法读取；仍可查看引用节选或打开原网页。" }
+            catch (e: Exception) { error = agentFailureMessage(e) }
         }
         AlertDialog(onDismissRequest = { detail = null }, title = { Text(source.text("title"), maxLines = 3) },
             text = { Column {

@@ -1,5 +1,6 @@
 package com.maoer.lite.data.download
 
+import com.maoer.lite.data.error.errorText
 import com.maoer.lite.data.model.Audio
 import com.maoer.lite.data.podcast.PodcastSource
 import kotlinx.coroutines.flow.StateFlow
@@ -33,7 +34,7 @@ interface Downloads {
 class UnavailableDownloads : Downloads {
     override val items = MutableStateFlow<List<DownloadItem>>(emptyList())
     override val error = MutableStateFlow<String?>(null)
-    override fun enqueue(audio: Audio) { error.value = "当前平台尚不支持下载" }
+    override fun enqueue(audio: Audio) { error.value = errorText("download_platform_unsupported") }
     override fun remove(id: String) = Unit
     override fun clearError() { error.value = null }
     override fun localUri(id: String): String? = null
@@ -43,7 +44,7 @@ class UnavailableDownloads : Downloads {
 fun downloadLabel(item: DownloadItem): String = when (item.status) {
     DownloadStatus.QUEUED -> "等待下载"
     DownloadStatus.DOWNLOADING -> if (item.total > 0) "下载中 ${(item.bytes * 100 / item.total).coerceIn(0, 100)}%" else "下载中"
-    DownloadStatus.WAITING -> "等待网络"
+    DownloadStatus.WAITING -> item.message ?: com.maoer.lite.data.error.errorText("download_wait_unknown")
     DownloadStatus.COMPLETE -> "已下载 · ${item.bytes / 1024 / 1024} MB"
-    DownloadStatus.FAILED -> item.message ?: "下载失败，可重试"
+    DownloadStatus.FAILED -> item.message ?: errorText("download_failed")
 }

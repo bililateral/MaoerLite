@@ -1,5 +1,6 @@
 package com.maoer.lite.ui.agent
 
+import com.maoer.lite.data.error.errorText
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -40,7 +41,8 @@ fun AgentConnectionDialog(session: AgentSession, dismiss: () -> Unit) {
             if (config.token.isNotEmpty()) useSsh = config.ssh != null
             config.ssh?.let { useSsh = true; host = it.host; port = it.port.toString(); user = it.username; password = it.password; pin = it.fingerprint }
             ready = true
-        } catch (_: Exception) { error = "连接配置无法读取，请检查设备安全存储" }
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) { error = agentFailureMessage(e) }
     }
     fun clearPin() { pin = ""; candidate = ""; error = "" }
     fun ssh() = AgentSshConfig(host.trim(), port.toIntOrNull() ?: 0, user.trim(), password, pin)
@@ -68,7 +70,7 @@ fun AgentConnectionDialog(session: AgentSession, dismiss: () -> Unit) {
                         try { candidate = session.probeSsh(ssh()) }
                         catch (e: CancellationException) { throw e }
                         catch (e: AgentTransportException) { error = agentError(e.code) }
-                        catch (_: Exception) { error = "请检查 SSH 地址、端口和用户名" }
+                        catch (_: Exception) { error = errorText("ssh_probe_failed") }
                         finally { busy = false; progress = "" }
                     }
                 }) { Text(if (busy) "正在读取…" else "读取服务器指纹") }
@@ -99,12 +101,11 @@ fun AgentConnectionDialog(session: AgentSession, dismiss: () -> Unit) {
                             config.validationError()?.let { error = it; return@launch }
                             session.configure(config)
                             dismiss()
-                        } catch (_: TimeoutCancellationException) { error = "连接验证超时，请确认手机已连接内网或 VPN 后重试。" }
+                        } catch (_: TimeoutCancellationException) { error = errorText("connection_probe_timeout") }
                         catch (e: CancellationException) { throw e }
                         catch (e: AgentTransportException) { error = agentError(e.code) }
-                        catch (e: AgentApiException) { error = if (e.code == "unauthorized") "服务访问令牌不正确，请复制服务器对应的 agent-server.token 内容。" else "服务验证失败，请检查服务地址后重试。" }
-                        catch (e: IllegalStateException) { error = e.message ?: "连接未保存，请重试。" }
-                        catch (_: Exception) { error = "无法验证服务连接，请检查内网或 VPN、服务地址及服务是否运行；原配置未更改。" }
+                        catch (e: AgentApiException) { error = agentFailureMessage(e) }
+                        catch (e: Exception) { error = agentFailureMessage(e) }
                         finally { busy = false; progress = "" }
                     }
                 }) { Text(if (busy) "请稍候…" else "验证并保存") }

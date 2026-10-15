@@ -1,5 +1,6 @@
 package com.maoer.lite.data.agent
 
+import com.maoer.lite.data.error.errorText
 import com.maoer.lite.data.manager.PlayerManager
 import com.maoer.lite.data.manager.PlaybackOptions
 import com.maoer.lite.data.manager.QueueNavigation
@@ -22,7 +23,7 @@ internal class PlaybackToolHandler(private val repository: PodcastRepository, pr
                 val episodeId = args.getValue("episode_id").jsonPrimitive.content
                 repository.source(podcastId)
                 val feed = repository.cached(podcastId) ?: repository.refresh(podcastId)
-                val episode = feed.episodes.firstOrNull { it.id == episodeId } ?: return error("该分集已不在节目目录中，请重新查询。")
+                val episode = feed.episodes.firstOrNull { it.id == episodeId } ?: return error(errorText("episode_missing"))
                 player.setPlaylist(feed.episodes.map { it.asAudio(feed) })
                 player.play(episode.asAudio(feed))
                 awaitPlaying(episodeId)
@@ -35,14 +36,14 @@ internal class PlaybackToolHandler(private val repository: PodcastRepository, pr
             }
             "resume_playback" -> {
                 require(args.isEmpty())
-                val id = player.currentAudio.value?.id ?: return error("当前没有选中的分集，请先选择节目。")
+                val id = player.currentAudio.value?.id ?: return error(errorText("playback_no_selection"))
                 player.resume(); awaitPlaying(id)
             }
             "previous_episode", "next_episode" -> {
                 require(args.isEmpty())
                 val queue = player.queue.value
                 val index = queue.indexOfFirst { it.id == player.currentAudio.value?.id }
-                if (index < 0) return error("当前没有可切换的播放队列，请先选择节目播放。")
+                if (index < 0) return error(errorText("playback_no_queue"))
                 val next = call.name == "next_episode"
                 val target = queue[if (next) QueueNavigation.nextIndex(index, queue.size) else QueueNavigation.previousIndex(index, queue.size)]
                 if (next) player.next() else player.previous()
@@ -72,7 +73,7 @@ internal class PlaybackToolHandler(private val repository: PodcastRepository, pr
                     else -> "已设置 $minutes 分钟后停止播放。"
                 })
             }
-            else -> error("不支持此工具。")
+            else -> error(errorText("tool_unsupported"))
         }
     }
     private suspend fun awaitPlaying(id: String): JsonObject {
@@ -90,7 +91,7 @@ internal class PlaybackToolHandler(private val repository: PodcastRepository, pr
         return buildJsonObject {
             snapshot.forEach { (key, value) -> put(key, value) }
             put("status", when { playing -> "ok"; snapshot.getValue("playback_error").jsonPrimitive.content.isNotEmpty() -> "error"; else -> "accepted" })
-            put("note", if (playing) "已确认目标分集实际播放。" else "尚未确认目标分集稳定播放，请根据实际状态回答。")
+            put("note", if (playing) "已确认目标分集实际播放。" else errorText("player_not_confirmed"))
         }
     }
 }

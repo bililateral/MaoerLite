@@ -20,6 +20,8 @@ class State(TypedDict):
     summary_pending: int
     extended_episodes: bool
     deferred_results: list[dict]
+    research: bool
+    route: dict
 
 
 

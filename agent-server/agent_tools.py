@@ -53,6 +53,25 @@ class Empty(StrictModel):
     pass
 
 
+class ResearchSearch(StrictModel):
+    query: str = Field(min_length=2, max_length=300)
+    podcast_id: str = Field(default='', max_length=150)
+
+
+class WebSearch(StrictModel):
+    query: str = Field(min_length=2, max_length=300)
+
+
+class WebRead(StrictModel):
+    url: str = Field(min_length=8, max_length=2000)
+    query: str = Field(default='', max_length=100)
+    offset: int = Field(default=0, ge=0, le=200000)
+
+
+class EpisodeRead(Play):
+    offset: int = Field(default=0, ge=0, le=262144)
+
+
 class Timer(StrictModel):
     minutes: int = Field(ge=-1, le=180, description='1..180 定时分钟；0 取消；-1 本集播完停止')
 
@@ -69,6 +88,10 @@ class Speed(StrictModel):
 
 
 TOOLS = {
+    'web_search': (WebSearch, '搜索公开互联网以核实最新外部信息。仅免费额度，失败不自动付费。返回摘要及真实网址；关键事实应继续read_web_page读取原文。不是播客检索。'),
+    'read_web_page': (WebRead, '读取本轮搜索结果或用户提供的公开网页正文。query可定位文中词，offset按字符分页；只有实际返回原文能作为引用依据。'),
+    'search_rss': (ResearchSearch, '仅在用户查找或了解播客内容时使用。自然语言query进行RSS说明语义+关键词检索；可限制已知podcast_id。覆盖和索引完成比例会返回。只代表RSS说明，不代表音频。'),
+    'read_episode_description': (EpisodeRead, '按已查询的真实节目/分集ID读取RSS说明，offset分页，每次最多4000字符。has_more=true时未阅读全文；不是音频转写。'),
     'search_catalog': (Search, '搜索本机真实播客目录，支持中文、分类、全拼和拼音首字母。返回最多8个候选，total是总命中，returned/omitted标明实际展示和省略数量；has_more为true时需缩小关键词，不把前8项当全部。多个匹配时请用户选择。'),
     'list_episodes': (Episodes, '查询真实RSS分集，每页最多8项，offset分页。query仅匹配标题文字；episode_number精确匹配标题开头期号；position选择指定order完整列表的第N条(从1起)，与标题期号不同。position/episode_number/query不能混用，position时offset必须0。order=newest按时间倒序，source按节目页原始顺序，reverse_source按节目页倒序。feed_total是总条目数，不是最大期号；零匹配仅说明本次条件无匹配。仅latest_verified=true能确定最新一期。'),
     'get_podcast_details': (PodcastDetails, '读取已查询节目ID的真实RSS节目简介、作者与目录统计（新版客户端提供catalog_summary）。统计覆盖完整可用列表的标题编号、缺口、重复、未识别数字期号项与解析筛除计数，用于核查总集数和期号差异；返回来源及刷新/缓存状态。'),
@@ -86,12 +109,14 @@ TOOLS = {
 DEFINITIONS = [{'type': 'function', 'function': {'name': name, 'description': description,
                 'parameters': model.model_json_schema()}} for name, (model, description) in TOOLS.items()]
 
-def definitions(extended_episodes=False):
+def definitions(extended_episodes=False, research=False):
+    available = [d for d in DEFINITIONS if research or d['function']['name'] not in
+                 ('web_search', 'read_web_page', 'search_rss', 'read_episode_description')]
     if extended_episodes:
-        return DEFINITIONS
+        return available
     return [d if d['function']['name'] != 'list_episodes' else {'type': 'function', 'function': {
         'name': 'list_episodes', 'description': '查询已知节目真实RSS分集，query仅按标题关键词匹配，最多8项。此客户端不支持列表序号和分页，不能把总数当标题期号；仅latest_verified=true可确认最新一期。',
-        'parameters': LegacyEpisodes.model_json_schema()}} for d in DEFINITIONS]
+        'parameters': LegacyEpisodes.model_json_schema()}} for d in available]
 
 
 

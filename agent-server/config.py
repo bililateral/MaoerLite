@@ -23,6 +23,8 @@ class Settings:
     reasoning_effort: str = 'high'
     # Optional operator quota, independent of upstream 429 cooldowns. 0 disables it.
     model_requests_per_minute: int = 0
+    tavily_key: str = field(default='', repr=False)
+    web_monthly_limit: int = 950
 
     @property
     def endpoint(self):
@@ -31,7 +33,11 @@ class Settings:
 
 def load_settings(path: Path = ROOT / '.local/agent.env') -> Settings:
     values = {}
-    for line in path.read_text(encoding='utf-8-sig').splitlines():
+    private_research = path.with_name('research.env')
+    configuration = path.read_text(encoding='utf-8-sig')
+    if private_research.exists():
+        configuration += '\n' + private_research.read_text(encoding='utf-8-sig')
+    for line in configuration.splitlines():
         line = line.strip()
         if not line or line.startswith('#'):
             continue
@@ -78,4 +84,5 @@ def load_settings(path: Path = ROOT / '.local/agent.env') -> Settings:
         raise ValueError('Invalid local access token file')
     return Settings(api_key=key, access_token=token, port=port, base_url=base_url, model=model, host=host,
                     agent_thinking=thinking == 'enabled', reasoning_effort=effort,
-                    model_requests_per_minute=model_rpm)
+                    model_requests_per_minute=model_rpm, tavily_key=values.get('TAVILY_API_KEY', ''),
+                    web_monthly_limit=min(950, max(0, int(values.get('WEB_MONTHLY_LIMIT', '950')))))

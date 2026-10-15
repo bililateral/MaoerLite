@@ -6,7 +6,7 @@ APP_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 RUNTIME="$APP_ROOT/.local"
 AGENT_PYTHON="${AGENT_PYTHON:-$HOME/miniconda3/envs/py310/bin/python}"
 mkdir -p "$RUNTIME"
-export PYTHONPATH="$RUNTIME/packages"
+export PYTHONPATH="$RUNTIME/packages:$RUNTIME/embedding-packages"
 export PYTHONDONTWRITEBYTECODE=1
 
 owned_pid() {

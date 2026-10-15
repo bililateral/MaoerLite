@@ -14,11 +14,26 @@ from agent_memory import last_turn, model_messages, references, remember, replay
 from agent_summary import MAX_BATCHES, SUMMARY_TIMEOUT, batch, parse_summary, summary_messages, with_summary
 from selection_policy import selection_identity_refresh, playback_preflight, episode_selection_question
 from task_state import State, MAX_TOOL_CALLS, MAX_MODEL_ROUNDS
+from research_policy import classify, allowed_tools, instructions
+from research_rss import CATALOG
+from research_tools import SERVER_TOOLS
+from research_sources import annotate, citation_context, valid_citations
 
 
 class AgentGraph:
-    def __init__(self, settings, store, model, get_run):
+    def __init__(self, settings, store, model, get_run, research=None):
         self.settings, self.store, self.model, self.get_run = settings, store, model, get_run
+        self.research = research
+
+    def record_result(self, run_id, receipt):
+        run = self.get_run(run_id)
+        previous = next((r for r in run['results'] if r['call_id'] == receipt['call_id']), None)
+        result, sources = annotate(run, receipt['result'])
+        receipt = {**receipt, 'result': result}
+        results = [r if r['call_id'] != receipt['call_id'] else receipt for r in run['results']]
+        if previous is None: results.append(receipt)
+        self.store.update(run_id, results=results, sources=sources)
+        return receipt
 
     def compile(self, saver):
         graph = StateGraph(State)
@@ -64,7 +79,12 @@ class AgentGraph:
             pending = pending[len(ids):]
         self.store.update(run_id, status='generating', summary_turns=len(saved['covered']),
                           summary_pending=len(pending), summary_error=failure)
-        return {'summary': saved['data'], 'summary_pending': len(pending), 'summary_candidates': []}
+        extra = {}
+        if state.get('research'):
+            route = await classify(self.model, self.settings, state['messages'], CATALOG if 'search_hints' in self.get_run(run_id)['input'].get('capabilities', []) else [])
+            extra['route'] = route
+            self.store.update(run_id, search_hint=route['hint'], route=route, sources=[])
+        return {'summary': saved['data'], 'summary_pending': len(pending), 'summary_candidates': [], **extra}
 
 
     async def model_node(self, state):
@@ -75,6 +95,14 @@ class AgentGraph:
         messages = model_messages(state['messages'], state.get('memory', {}))
         messages = with_summary(messages, state.get('summary', {}), state.get('summary_pending', 0) > 0)
         messages = model_instructions(messages, state['messages'], self.settings.model, final_only)
+        available = definitions(state.get('extended_episodes', False), state.get('research', False))
+        allowed = allowed_tools(state.get('route', {})) if state.get('research') else {d['function']['name'] for d in available}
+        if state.get('research'):
+            # New semantic retrieval replaces the legacy literal search for new clients.
+            allowed.discard('search_podcast_content')
+            available = [d for d in available if d['function']['name'] in allowed]
+            messages = [messages[0], {'role': 'system', 'content': instructions(state.get('route', {}))},
+                        {'role': 'system', 'content': citation_context(self.get_run(run_id).get('sources', []))}, *messages[1:]]
         started, waited = time.monotonic(), 0
         async def publish(text):
             self.store.update(run_id, text=text, status='generating', retry_after=0)
@@ -82,7 +110,7 @@ class AgentGraph:
             self.store.update(run_id, text='', status='generating', retry_after=0, error='')
             try:
                 message = await self.model(self.settings,
-                                           messages, [] if final_only else definitions(state.get('extended_episodes', False)), publish)
+                                           messages, [] if final_only else available, publish)
                 break
             except ModelFailure as exc:
                 if (not exc.retryable or attempt == 2 or waited + exc.delay > 120
@@ -95,6 +123,8 @@ class AgentGraph:
         calls = validated_calls(message, state.get('extended_episodes', False))
         if final_only and calls:
             raise ModelFailure('tool_round_limit')
+        if not calls and state.get('research') and not valid_citations(message.get('content'), self.get_run(run_id).get('sources', [])):
+            raise ModelFailure('invalid_citation')
         if calls:
             # No tool is dispatched until complete model output and validation.
             known = list(references(state.get('memory', {})))
@@ -116,7 +146,7 @@ class AgentGraph:
                         (item.get('id') == args['podcast_id'] and item.get('kind') == 'podcast') or
                         (item.get('podcast_id') == args['podcast_id'] and item.get('kind') == 'episode') for item in known):
                     raise ModelFailure('unverified_podcast_id')
-                if call['name'] == 'play_episode' and not any(
+                if call['name'] in ('play_episode', 'read_episode_description') and not any(
                         item.get('id') == args['episode_id'] and item.get('podcast_id') == args['podcast_id']
                         and item.get('kind') == 'episode' for item in known):
                     raise ModelFailure('unverified_episode_id')
@@ -144,6 +174,16 @@ class AgentGraph:
         deferred = []
         executable = []
         for call in calls:
+            if call['name'] not in allowed:
+                deferred.append(self.record_result(run_id, {'call_id': call['id'], 'result': {
+                    'status': 'error', 'executed': False, 'note': '此工具不适用于用户本轮意图，请直接回答或使用本轮允许的工具。'}}))
+                continue
+            if call['name'] in SERVER_TOOLS:
+                run = self.get_run(run_id)
+                old = next((r for r in run['results'] if r['call_id'] == call['id']), None)
+                receipt = old or {'call_id': call['id'], 'result': await self.research.perform(call, run)}
+                deferred.append(self.record_result(run_id, receipt))
+                continue
             selection = episode_selection_question(state['messages'], [call])
             if selection:
                 deferred.append({'call_id': call['id'], 'result': {
@@ -155,9 +195,10 @@ class AgentGraph:
         if not executable:
             messages += [{'role': 'tool', 'tool_call_id': r['call_id'],
                           'content': json.dumps(r['result'], ensure_ascii=False)} for r in deferred]
+        memory = remember(state.get('memory', {}), run_id, calls, deferred) if deferred else state.get('memory', {})
         return {'messages': messages, 'rounds': state['rounds'] + 1,
                 'calls': executable, 'deferred_results': deferred if executable else [],
-                'tool_count': count + len(calls)}
+                'tool_count': count + len(calls), 'memory': memory}
 
 
     def device_node(self, state, config: RunnableConfig):
@@ -167,6 +208,8 @@ class AgentGraph:
         with set_config_context(config) as context:
             results = context.run(interrupt, {'calls': state['calls']})
         results = results + state.get('deferred_results', [])
+        if state.get('research'):
+            results = [self.record_result(state['run_id'], r) for r in results]
         messages = state['messages'] + [{'role': 'tool', 'tool_call_id': r['call_id'],
                                        'content': json.dumps(r['result'], ensure_ascii=False)} for r in results]
         memory = state.get('memory')

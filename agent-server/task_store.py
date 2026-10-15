@@ -2,10 +2,12 @@
 import hashlib
 import json
 import sqlite3
+from pathlib import Path
 
 
 class Store:
     def __init__(self, path):
+        self.path = Path(path)
         self.db = sqlite3.connect(path)
         self.db.execute('PRAGMA journal_mode=WAL')
         self.db.execute('CREATE TABLE IF NOT EXISTS agent_runs (id TEXT PRIMARY KEY, conversation TEXT NOT NULL, body TEXT NOT NULL)')

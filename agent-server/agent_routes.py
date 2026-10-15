@@ -54,6 +54,16 @@ def register(app, settings):
         try: return app.state.agent.get_run(run_id)
         except KeyError: return JSONResponse({'error': {'code': 'run_not_found'}}, 404)
 
+    @app.get('/v1/agent/runs/{run_id}/sources/{number}')
+    async def source_text(run_id: str, number: int, request: Request):
+        run = await lookup(run_id, request)
+        if isinstance(run, JSONResponse): return run
+        source = next((s for s in run.get('sources', []) if s['number'] == number), None)
+        if source is None: return JSONResponse({'error': {'code': 'source_not_found'}}, 404)
+        text = app.state.agent.research.store.read(source.get('document_id', ''))
+        return {'text': text or source.get('evidence', ''), 'complete': bool(text) and not source.get('description_truncated', False),
+                'source_url': source.get('original_url') or source.get('source_url', '')}
+
     @app.delete('/v1/agent/conversations/{conversation_id}')
     async def delete_conversation(conversation_id: str, request: Request):
         refusal = await authorized(request)

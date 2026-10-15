@@ -1,0 +1,180 @@
+"""RSS-only semantic retrieval; stable identities match the Android parser."""
+import asyncio
+import html
+import json
+import re
+import time
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from urllib.parse import urlsplit
+from research_store import digest
+
+CATALOG = json.loads(Path(__file__).with_name('research_catalog.json').read_text(encoding='utf-8'))
+CONTENT = '{http://purl.org/rss/1.0/modules/content/}encoded'
+
+
+def plain(text):
+    return re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]*>', ' ', text))).strip()
+
+
+def parse_feed(raw, source):
+    if len(raw) > 8_000_000 or b'<!DOCTYPE' in raw.upper() or b'<!ENTITY' in raw.upper():
+        raise ValueError('rss_unsupported')
+    channel = ET.fromstring(raw).find('channel')
+    if channel is None: raise ValueError('rss_invalid')
+    result = []
+    title = plain(channel.findtext('title') or source['title'])
+    for item in channel.findall('item'):
+        name = plain(item.findtext('title') or '')[:16384]
+        enclosure = item.find('enclosure')
+        audio = enclosure.get('url', '').strip() if enclosure is not None else ''
+        if not name or urlsplit(audio).scheme not in ('http', 'https'): continue
+        published = (item.findtext('pubDate') or '').strip()
+        identity = (item.findtext('guid') or '').strip() or (f'{name}|{published}' if published else audio)
+        body = plain(item.findtext(CONTENT) or item.findtext('description') or '')
+        link = (item.findtext('link') or '').strip()
+        result.append({'kind': 'episode', 'id': source['id'] + ':' + digest(identity), 'podcast_id': source['id'],
+                       'title': name[:300], 'podcast_title': title[:150], 'published': published[:150],
+                       'source_url': source['feed_url'], 'original_url': link if urlsplit(link).scheme in ('http', 'https') else '',
+                       'description': body[:262144], 'description_truncated': len(body) > 262144})
+        if len(result) >= 1000: break
+    return list({row['id']: row for row in result}.values())
+
+
+def chunks(row):
+    body = row['description']
+    # Short overlapping passages fit a Chinese 512-token encoder with title.
+    return [(start, body[start:start + 320]) for start in range(0, len(body), 280)] or [(0, row['title'])]
+
+
+class RssResearch:
+    def __init__(self, store, client, model_dir):
+        self.store, self.client, self.model_dir = store, client, str(model_dir)
+        self.slots = asyncio.Semaphore(3)
+        self.embedding_lock = asyncio.Lock()
+        self.encoder = None
+        self.background = None
+        self.closed = False
+
+    def encoder_sync(self):
+        if self.encoder is None:
+            from fastembed import TextEmbedding
+            # Use the pinned artifact directly: Hub cache metadata contains host-specific paths.
+            snapshot = Path(self.model_dir) / 'models--Qdrant--bge-small-zh-v1.5' / 'snapshots' / '46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59'
+            self.encoder = TextEmbedding('BAAI/bge-small-zh-v1.5', cache_dir=self.model_dir, threads=4,
+                                         local_files_only=True, specific_model_path=str(snapshot))
+        return self.encoder
+
+    async def load(self, source, force=False):
+        fetched, rows = self.store.feed(source['id'])
+        if not force and rows and time.time() - fetched < 3600: return fetched, rows
+        async with self.slots:
+            try:
+                async with self.client.stream('GET', source['feed_url'], follow_redirects=True,
+                                              headers={'Accept': 'application/rss+xml, application/xml, */*',
+                                                       'User-Agent': 'MaoerLite/0.3 RSS'}, timeout=15) as response:
+                    response.raise_for_status()
+                    raw = bytearray()
+                    async for block in response.aiter_bytes():
+                        raw.extend(block)
+                        if len(raw) > 8_000_000: raise ValueError('rss_too_large')
+                rows = await asyncio.to_thread(parse_feed, bytes(raw), source)
+                fetched = int(time.time())
+                self.store.save_feed(source['id'], fetched, rows)
+            except (Exception,):
+                # Preserve a real last-successful timestamp; never call it fresh.
+                pass
+            return fetched, rows
+
+    def entries(self, rows):
+        for row in rows:
+            for start, text in chunks(row):
+                encoded = row['title'][:80] + '\n' + text
+                yield digest('bge-small-zh-v1.5:' + encoded), row, start, text, encoded
+
+    async def index_rows(self, rows):
+        entries = list(self.entries(rows))
+        known = self.store.vectors([e[0] for e in entries])
+        missing = list({e[0]: e[4] for e in entries if e[0] not in known}.items())
+        for offset in range(0, len(missing), 32):
+            batch = missing[offset:offset + 32]
+            async with self.embedding_lock:
+                def encode():
+                    return [v.astype('float32').tobytes() for v in self.encoder_sync().embed([b[1] for b in batch], batch_size=32)]
+                vectors = await asyncio.to_thread(encode)
+            self.store.save_vectors([(b[0], v) for b, v in zip(batch, vectors)])
+            await asyncio.sleep(0)
+
+    def start(self):
+        if self.background is None:
+            self.background = asyncio.create_task(self.maintain())
+
+    async def maintain(self):
+        while not self.closed:
+            for source in CATALOG:
+                try:
+                    _, rows = await self.load(source)
+                    await self.index_rows(rows)
+                except Exception:
+                    pass  # Query response reports actual vector coverage.
+            await asyncio.sleep(3600)
+
+    async def search(self, query, podcast_id=''):
+        sources = [s for s in CATALOG if not podcast_id or s['id'] == podcast_id]
+        if not sources: return {'status': 'error', 'note': '节目身份不存在。'}
+        feeds = await asyncio.gather(*(self.load(s) for s in sources))
+        rows = [r for _, group in feeds for r in group]
+        entries = list(self.entries(rows))
+        vectors = self.store.vectors([e[0] for e in entries])
+        vector = None
+        try:
+            async with self.embedding_lock:
+                vector = await asyncio.to_thread(lambda: next(iter(self.encoder_sync().query_embed(query))))
+        except Exception:
+            pass
+        terms = re.findall(r'[a-z0-9]+|[\u4e00-\u9fff]{2}', query.lower())
+        scored = []
+        if vector is not None: import numpy as np
+        for key, row, start, text, _ in entries:
+            haystack = (row['title'] + ' ' + text).lower()
+            lexical = sum(t in haystack for t in terms) / max(1, len(terms))
+            semantic = float(np.dot(np.frombuffer(vectors[key], dtype='float32'), vector)) if vector is not None and key in vectors else 0
+            if lexical >= 0.25 or semantic >= 0.45:
+                scored.append((0.65 * semantic + 0.35 * lexical, row, start, text))
+        scored.sort(key=lambda e: e[0], reverse=True)
+        items, selected = [], set()
+        timestamps = {row['id']: fetched for fetched, group in feeds for row in group}
+        for score, row, start, text in scored:
+            if row['id'] in selected: continue
+            selected.add(row['id'])
+            items.append(self.evidence(row, text, start, timestamps.get(row['id'], 0)))
+            if len(items) == 6: break
+        return {'status': 'ok', 'items': items, 'coverage_available': sum(bool(r) for _, r in feeds),
+                'coverage_total': len(sources), 'semantic_indexed_passages': len(vectors) if vector is not None else 0,
+                'total_passages': len(entries), 'audio_analyzed': False,
+                'note': f'RSS可用源 {sum(bool(r) for _, r in feeds)}/{len(sources)}；语义索引覆盖 {len(vectors) if vector is not None else 0}/{len(entries)} 个片段。其余仅按关键词检索。只返回相关片段，不代表音频全文或全部结果。'}
+
+    def evidence(self, row, excerpt, start, fetched):
+        return {k: v for k, v in row.items() if k != 'description'} | {
+            'evidence': excerpt, 'evidence_field': 'RSS分集说明', 'evidence_truncated': start > 0 or len(excerpt) < len(row['description']) or row['description_truncated'],
+            'document_id': self.store.document(row['description']), 'offset': start,
+            'fetched_at': fetched, 'freshness': 'recent_cache' if time.time() - fetched < 3600 else 'cached'}
+
+    async def read(self, podcast_id, episode_id, offset=0):
+        source = next((s for s in CATALOG if s['id'] == podcast_id), None)
+        if not source: return {'status': 'error', 'note': '节目身份不存在。'}
+        fetched, rows = await self.load(source)
+        row = next((r for r in rows if r['id'] == episode_id), None)
+        if not row: return {'status': 'error', 'note': '当前可用RSS没有该分集，未读取原文。'}
+        body = row['description']
+        excerpt = body[offset:offset + 4000]
+        more = offset + len(excerpt) < len(body)
+        return {'status': 'ok', 'items': [self.evidence(row, excerpt, offset, fetched)], 'has_more': more,
+                'next_offset': offset + len(excerpt), 'total_characters': len(body),
+                'note': '分集RSS说明，非音频转写。' + ('源文本超过读取上限，完整性未保证。' if row['description_truncated'] else '')}
+
+    async def close(self):
+        self.closed = True
+        if self.background:
+            self.background.cancel()
+            await asyncio.gather(self.background, return_exceptions=True)

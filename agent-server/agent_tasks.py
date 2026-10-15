@@ -30,7 +30,10 @@ class AgentTasks:
             self.model = partial(model, app)
         self.jobs = {}
         self.dispatcher = ToolDispatcher(store, self.get_run, self.jobs, self.launch)
-        self.graph = AgentGraph(settings, store, self.model, self.get_run).compile(saver)
+        from research_tools import ResearchTools
+        self.research = ResearchTools(settings, app.state.client, store.path.parent / 'research.sqlite3')
+        self.research.rss.start()
+        self.graph = AgentGraph(settings, store, self.model, self.get_run, self.research).compile(saver)
 
     def launch(self, run_id, value):
         if run_id in self.jobs: raise TaskConflict('task_busy')
@@ -84,7 +87,8 @@ class AgentTasks:
         messages = [{'role': 'system', 'content': SYSTEM + selection_policy(extended)}] + history + [{'role': 'user', 'content': request.message}]
         initial = {'run_id': request.id, 'messages': messages, 'rounds': 0, 'calls': [], 'memory': memory,
                    'tool_count': 0, 'final_only': False, 'summary_candidates': [r['id'] for r in evicted],
-                   'summary': {}, 'summary_pending': 0, 'extended_episodes': extended}
+                   'summary': {}, 'summary_pending': 0, 'extended_episodes': extended,
+                   'research': 'research_v3' in value.get('capabilities', [])}
         run = self.store.put({'id': request.id, 'conversation_id': request.conversation_id, 'status': 'generating',
             'text': '', 'calls': [], 'results': [], 'claimed': [], 'receipts': {}, 'error': '', 'retry_after': 0,
             'retry_at': 0, 'version': 0, 'input': value, 'history': [], 'memory': memory, 'created_at': int(time.time()),
@@ -172,6 +176,7 @@ class AgentTasks:
         jobs = list(self.jobs.values())
         for job in jobs: job.cancel()
         await asyncio.gather(*jobs, return_exceptions=True)
+        await self.research.close()
 
 
 @asynccontextmanager

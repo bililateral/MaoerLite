@@ -33,6 +33,9 @@ import com.maoer.lite.data.podcast.PodcastSearchIndex
 import com.maoer.lite.ui.podcast.PodcastScreen
 import com.maoer.lite.ui.library.LibraryScreen
 import com.maoer.lite.ui.agent.AgentScreen
+import com.maoer.lite.data.agent.AgentSession
+import com.maoer.lite.data.agent.agentSearchHint
+import org.koin.compose.koinInject
 
 import com.maoer.lite.ui.components.NowPlayingBar
 import com.maoer.lite.ui.components.PodcastCover
@@ -47,6 +50,9 @@ object HomeScreen : Screen {
     @Composable
     override fun Content() {
         val model = getScreenModel<HomeViewModel>()
+        val agent = koinInject<AgentSession>()
+        val agentState by agent.state.collectAsState()
+        val searchHint = remember(agentState.history, agentState.personalizedSearch, agentState.ready) { agentSearchHint(agentState) }
         val navigator = LocalNavigator.current
         var selectedTab by rememberSaveable { mutableStateOf(0) }
         var query by rememberSaveable { mutableStateOf("") }
@@ -83,7 +89,7 @@ object HomeScreen : Screen {
         ) { padding ->
             if (selectedTab == 1) {
                 CategoryBrowser(searchIndex = model.searchIndex, query = categoryQuery, onQueryChange = { categoryQuery = it },
-                    listState = categoryListState, railState = categoryRailState,
+                    listState = categoryListState, railState = categoryRailState, searchHint = searchHint,
                     onOpenPodcast = { navigator?.push(PodcastScreen(it.id)) },
                     modifier = Modifier.fillMaxSize().padding(padding))
             } else {
@@ -103,7 +109,7 @@ object HomeScreen : Screen {
                     }
                     TextField(
                         value = query, onValueChange = { query = it }, singleLine = true,
-                        placeholder = { Text("搜索节目、拼音或首字母", fontSize = 14.sp) },
+                        placeholder = { Text(if (searchHint.isBlank()) "搜索节目、拼音或首字母" else "猜你想搜：$searchHint", fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         leadingIcon = { Icon(Icons.Default.Search, null, modifier = Modifier.size(21.dp)) },
                         trailingIcon = {
                             if (query.isNotEmpty()) IconButton(onClick = { query = "" }) {
@@ -178,16 +184,16 @@ object HomeScreen : Screen {
 @Composable
 private fun FeaturedPodcast(source: PodcastSource, onClick: () -> Unit) {
     Card(onClick = onClick, shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
+        // Keep the editorial label outside the artwork so embedded logos remain readable at any width.
+        Surface(color = Color(0xFFF0EBE3), modifier = Modifier.fillMaxWidth()) {
+            Text("本期精选 / ${source.category}", color = Color(0xFF292623), fontSize = 11.sp,
+                fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp))
+        }
         Box(Modifier.fillMaxWidth().height(270.dp).background(Color(0xFF464C43))) {
             AsyncImage(model = source.coverUrl, contentDescription = null, contentScale = ContentScale.Crop,
                 modifier = Modifier.matchParentSize())
             Box(Modifier.matchParentSize().background(Brush.verticalGradient(
                 listOf(Color.Black.copy(alpha = 0.08f), Color.Black.copy(alpha = 0.15f), Color.Black.copy(alpha = 0.82f)))))
-            Surface(color = Color(0xFFFAF7F2), shape = RoundedCornerShape(6.dp),
-                modifier = Modifier.padding(18.dp)) {
-                Text("本期精选 / ${source.category}", color = Color(0xFF292623), fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
-            }
             Row(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(22.dp),
                 verticalAlignment = Alignment.Bottom) {
                 Column(Modifier.weight(1f)) {

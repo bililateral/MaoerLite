@@ -36,6 +36,8 @@ internal class CatalogToolHandler(private val repository: PodcastRepository) {
                     }
                     putJsonArray("items") { matches.take(8).forEach { source -> add(buildJsonObject {
                         put("kind", "podcast"); put("id", source.id); put("title", source.title); put("category", source.category)
+                        put("content_relevance_verified", false)
+                        put("match_note", "名称、分类或拼音匹配；不能据此认定节目内容与查询主题相关")
                     }) } }
                 }
             }

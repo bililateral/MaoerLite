@@ -16,6 +16,7 @@ import kotlinx.coroutines.launch
 
 @Composable
 fun AgentConnectionDialog(session: AgentSession, dismiss: () -> Unit) {
+    val state by session.state.collectAsState()
     var url by remember { mutableStateOf("http://127.0.0.1:8787") }
     var token by remember { mutableStateOf("") }
     var useSsh by remember { mutableStateOf(true) }
@@ -45,6 +46,10 @@ fun AgentConnectionDialog(session: AgentSession, dismiss: () -> Unit) {
     fun ssh() = AgentSshConfig(host.trim(), port.toIntOrNull() ?: 0, user.trim(), password, pin)
     AlertDialog(onDismissRequest = { if (!busy) dismiss() }, title = { Text("助手服务连接") }, text = {
         Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Text("根据当前对话推荐搜索", Modifier.weight(1f))
+                Switch(checked = state.personalizedSearch, onCheckedChange = { session.setPersonalizedSearch(it) }, enabled = !busy)
+            }
             Row {
                 FilterChip(selected = useSsh, onClick = { if (!busy) useSsh = true }, label = { Text("SSH 隧道") })
                 Spacer(Modifier.width(8.dp))

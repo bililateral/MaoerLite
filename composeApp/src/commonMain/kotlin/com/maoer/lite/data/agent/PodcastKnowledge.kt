@@ -154,5 +154,12 @@ fun knowledgeExcerpt(text: String, keywords: List<String>, limit: Int = 900): St
         val start = (position - piece / 3).coerceAtLeast(0)
         start until (start + piece).coerceAtMost(text.length)
     }
-    return ranges.joinToString(" … ") { range -> text.substring(range.first, range.last + 1) }.take(limit)
+    val merged = mutableListOf<IntRange>()
+    ranges.forEach { range ->
+        val previous = merged.lastOrNull()
+        if (previous != null && range.first <= previous.last + 1)
+            merged[merged.lastIndex] = previous.first..maxOf(previous.last, range.last)
+        else merged.add(range)
+    }
+    return merged.joinToString(" … ") { range -> text.substring(range.first, range.last + 1) }.take(limit)
 }

@@ -59,7 +59,7 @@ object AgentScreen : Screen {
             }
         }
         Scaffold(containerColor = Color(0xFFFAF7F2), topBar = {
-            TopAppBar(title = { Column { Text("点播助手", fontWeight = FontWeight.Bold); Text("找节目 · 控制播放", fontSize = 11.sp) } },
+            TopAppBar(title = { Column { Text("点播助手", fontWeight = FontWeight.Bold); Text("查资料 · 找节目 · 控制播放", fontSize = 11.sp) } },
                 navigationIcon = { IconButton(onClick = { navigator?.pop() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } },
                 actions = {
                     IconButton(onClick = { session.newConversation() }, enabled = !state.working && !pending) { Icon(Icons.Default.AddComment, "新对话") }
@@ -124,33 +124,19 @@ object AgentScreen : Screen {
                             Text(turn.question, Modifier.padding(14.dp))
                         }
                         val run = turn.run
-                        if (!run?.text.isNullOrBlank()) Surface(color = Color.White, shape = RoundedCornerShape(18.dp), modifier = Modifier.padding(top = 10.dp)) {
-                            AgentReply(run!!.text, Modifier.fillMaxWidth().padding(14.dp))
-                        }
-                        run?.results?.forEach { receipt ->
-                            val cards = receipt.result["items"] as? JsonArray
-                            if (receipt.result["note"]?.jsonPrimitive?.content.orEmpty().isNotBlank())
-                                Text(receipt.result.getValue("note").jsonPrimitive.content, color = Color(0xFF756D65), fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
-                            cards?.forEach { item ->
-                                val card = item.jsonObject
-                                val title = card["title"]?.jsonPrimitive?.content.orEmpty()
-                                val kind = card["kind"]?.jsonPrimitive?.content.orEmpty()
-                                Surface(color = Color.White, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                                    Column(Modifier.padding(14.dp)) {
-                                        Text(title, fontWeight = FontWeight.SemiBold)
-                                        card["podcast_title"]?.jsonPrimitive?.content?.let {
-                                            Text(it, fontSize = 13.sp, color = Color(0xFF756D65))
-                                        }
-                                        Text(card[if (kind == "podcast") "category" else "published"]?.jsonPrimitive?.content.orEmpty(), fontSize = 12.sp, color = Color.Gray)
-                                        if (card.containsKey("evidence")) RssEvidence(card)
-                                        if (kind == "podcast") TextButton(onClick = { navigator?.push(PodcastScreen(card.getValue("id").jsonPrimitive.content)) }) { Text("查看节目", color = accent) }
-                                        else TextButton(onClick = {
-                                            val podcast = card["podcast_title"]?.jsonPrimitive?.content.orEmpty()
-                                            input = if (podcast.isBlank()) "请播放《$title》这一集" else "请播放《$podcast》的《$title》这一集"
-                                        }, enabled = !state.working) { Text("选择这一集", color = accent) }
-                                    }
-                                }
+                        var selectedSource by remember(turn.id) { mutableStateOf<Int?>(null) }
+                        if (run != null) {
+                            if (run.text.isNotBlank()) Surface(color = Color.White, shape = RoundedCornerShape(18.dp), modifier = Modifier.padding(top = 10.dp)) {
+                                AgentReply(run.text, Modifier.fillMaxWidth().padding(14.dp),
+                                    run.sources.mapNotNull { it["number"]?.jsonPrimitive?.intOrNull }.toSet()) { selectedSource = it }
                             }
+                            AgentSources(run, session, selectedSource, { selectedSource = it },
+                                openPodcast = { navigator?.push(PodcastScreen(it)) },
+                                selectEpisode = { card ->
+                                    val podcast = card.text("podcast_title")
+                                    val title = card.text("title")
+                                    input = if (podcast.isBlank()) "请播放《$title》这一集" else "请播放《$podcast》的《$title》这一集"
+                                }, enabled = !state.working)
                         }
                     }
                 }
@@ -158,26 +144,5 @@ object AgentScreen : Screen {
             }
         }
         if (settings) AgentConnectionDialog(session) { settings = false }
-    }
-}
-
-@Composable
-private fun RssEvidence(card: JsonObject) {
-    var expanded by remember(card["id"], card["evidence"]) { mutableStateOf(false) }
-    val uri = androidx.compose.ui.platform.LocalUriHandler.current
-    val evidence = card["evidence"]?.jsonPrimitive?.content.orEmpty()
-    TextButton(onClick = { expanded = !expanded }) {
-        Text(if (expanded) "收起推荐依据" else "查看推荐依据", color = Color(0xFFB83D36))
-    }
-    if (expanded) {
-        Text(card["evidence_field"]?.jsonPrimitive?.content.orEmpty() +
-            if (card["freshness"]?.jsonPrimitive?.content == "refreshed") " · 本次已核对" else " · 缓存，更新时间未知",
-            fontSize = 12.sp, color = Color.Gray)
-        Text(evidence.ifBlank { "RSS 未提供简介，不能据此推断详细内容。" }, fontSize = 14.sp, lineHeight = 21.sp)
-        if (card["evidence_truncated"]?.jsonPrimitive?.booleanOrNull == true)
-            Text("以上为资料节选", fontSize = 12.sp, color = Color.Gray)
-        val source = card["source_url"]?.jsonPrimitive?.content.orEmpty()
-        if (source.startsWith("https://") || source.startsWith("http://"))
-            TextButton(onClick = { runCatching { uri.openUri(source) } }) { Text("打开 RSS 来源") }
     }
 }

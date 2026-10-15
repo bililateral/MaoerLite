@@ -71,6 +71,16 @@ class AgentApi(
         }
     }
     suspend fun get(id: String) = request("/v1/agent/runs/$id")
+    suspend fun sourceText(id: String, number: Int): AgentSourceText {
+        require(number in 1..48)
+        val connection = storage.connection()
+        val response = client.get(transport.endpoint(connection) + "/v1/agent/runs/$id/sources/$number") {
+            header(HttpHeaders.Authorization, "Bearer ${connection.token}")
+        }
+        val body = response.bodyAsText()
+        if (response.status.value !in 200..299) fail(body, response.status.value)
+        return json.decodeFromString(body)
+    }
     suspend fun cancel(id: String) = request("/v1/agent/runs/$id/cancel", post = true)
     suspend fun retry(id: String) = request("/v1/agent/runs/$id/retry", post = true)
     suspend fun claim(id: String, call: String) = request("/v1/agent/runs/$id/claim/${call.encodeURLPathPart()}", post = true)

@@ -5,7 +5,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
 data class AgentUiState(val history: AgentHistory = AgentHistory(), val ready: Boolean = false,
-                        val connected: Boolean = false, val working: Boolean = false, val notice: String = "")
+                        val connected: Boolean = false, val working: Boolean = false, val notice: String = "",
+                        val personalizedSearch: Boolean = true)
 
 /** App-scoped session survives navigation; explicit stop cancels further dispatch. */
 class AgentSession(private val storage: AgentStorage, private val api: AgentApi, private val tools: AgentTools) {
@@ -21,11 +22,26 @@ class AgentSession(private val storage: AgentStorage, private val api: AgentApi,
             val history = if (saved.starterQuestions.isEmpty()) {
                 saved.copy(starterQuestions = agentStarterQuestions()).also { storage.saveHistory(it) }
             } else saved
-            mutable.value = AgentUiState(history, ready = true, connected = storage.connection().token.isNotBlank())
+            mutable.value = AgentUiState(history, ready = true, connected = storage.connection().token.isNotBlank(),
+                                        personalizedSearch = storage.personalizedSearch())
         }
         catch (_: Exception) { mutable.value = mutable.value.copy(ready = false, notice = "本地助手记录无法读取，原文件已保留，请先修复本地记录。") }
     } }
     suspend fun connection() = storage.connection()
+    suspend fun sourceText(run: String, number: Int) = api.sourceText(run, number)
+    fun setPersonalizedSearch(value: Boolean) {
+        scope.launch {
+            try {
+                storage.savePersonalizedSearch(value)
+                mutable.value = mutable.value.copy(personalizedSearch = value)
+                if (!value) save(mutable.value.history.copy(turns = mutable.value.history.turns.map {
+                    it.copy(run = it.run?.copy(search_hint = ""))
+                }))
+            } catch (_: Exception) { mutable.value = mutable.value.copy(notice = "搜索推荐设置保存失败，请重试") }
+        }
+    }
+    private fun capabilities() = listOf("episode_selection_v2", "research_v3") +
+        if (mutable.value.personalizedSearch) listOf("search_hints") else emptyList()
     suspend fun probeSsh(value: AgentSshConfig) = api.probeSsh(value)
     suspend fun configure(value: AgentConnection) = withContext(Dispatchers.Main) {
         check(!configuring && !mutable.value.working) { "助手正在处理请求，请停止后再修改连接。" }
@@ -43,7 +59,8 @@ class AgentSession(private val storage: AgentStorage, private val api: AgentApi,
     }
     private suspend fun update(run: AgentRun) {
         val h = mutable.value.history
-        save(h.copy(turns = h.turns.map { if (it.id == run.id) it.copy(run = run) else it }))
+        val visible = if (mutable.value.personalizedSearch) run else run.copy(search_hint = "")
+        save(h.copy(turns = h.turns.map { if (it.id == run.id) it.copy(run = visible) else it }))
     }
     private fun failureNotice(reason: String) {
         val prefix = if (mutable.value.history.deletePending) "旧对话删除尚未确认，请重试删除。" else ""
@@ -69,7 +86,7 @@ class AgentSession(private val storage: AgentStorage, private val api: AgentApi,
         work {
             val turn = AgentTurn(agentId(), question.trim())
             save(old.copy(turns = (old.turns + turn).takeLast(30)))
-            follow(api.create(AgentNewRun(turn.id, old.conversationId, turn.question, listOf("episode_selection_v2"))))
+            follow(api.create(AgentNewRun(turn.id, old.conversationId, turn.question, capabilities())))
         }
     }
     fun reconnect(retry: Boolean = false) = work {
@@ -95,7 +112,7 @@ class AgentSession(private val storage: AgentStorage, private val api: AgentApi,
         val turn = h.turns.lastOrNull() ?: return@work
         val run = try { api.get(turn.id) } catch (e: AgentApiException) {
             if (e.status != 404) throw e
-            api.create(AgentNewRun(turn.id, h.conversationId, turn.question, listOf("episode_selection_v2")))
+            api.create(AgentNewRun(turn.id, h.conversationId, turn.question, capabilities()))
         }
         follow(if (retry && run.status == "failed") api.retry(run.id) else run)
     }

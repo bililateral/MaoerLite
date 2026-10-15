@@ -38,6 +38,8 @@ class AgentStorage {
     suspend fun saveConnection(value: AgentConnection) = write("connection.json", protectAgentConnection(json.encodeToString(value)))
     suspend fun history() = read("history.json")?.let { json.decodeFromString<AgentHistory>(it) } ?: AgentHistory()
     suspend fun saveHistory(value: AgentHistory) = write("history.json", json.encodeToString(value))
+    suspend fun personalizedSearch() = read("personalized-search.txt") != "false"
+    suspend fun savePersonalizedSearch(value: Boolean) = write("personalized-search.txt", value.toString())
     suspend fun execution(key: String) = read("execution-$key.json")?.let { json.decodeFromString<AgentExecution>(it) }
     suspend fun saveExecution(key: String, value: AgentExecution) = write("execution-$key.json", json.encodeToString(value))
 

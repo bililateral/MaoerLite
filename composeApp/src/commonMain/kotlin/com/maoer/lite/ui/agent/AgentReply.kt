@@ -11,6 +11,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.UriHandler
 import com.mikepenz.markdown.compose.components.MarkdownComponentModel
 import com.mikepenz.markdown.compose.components.markdownComponents
 import com.mikepenz.markdown.m3.Markdown
@@ -20,14 +24,30 @@ import org.intellij.markdown.flavours.gfm.GFMTokenTypes
 
 /** Render model text only: no remote image loader, HTML execution or tool actions. */
 @Composable
-internal fun AgentReply(content: String, modifier: Modifier = Modifier) {
+internal fun AgentReply(content: String, modifier: Modifier = Modifier, citations: Set<Int> = emptySet(), onCitation: (Int) -> Unit = {}) {
+    val original = LocalUriHandler.current
+    val rendered = remember(content, citations) {
+        Regex("(?<!!)\\[(\\d{1,3})\\](?!\\()") .replace(content) { match ->
+            val number = match.groupValues[1].toInt()
+            if (number in citations) "[${match.value}](maoer-source://$number)" else match.value
+        }
+    }
+    val handler = object : UriHandler {
+        override fun openUri(uri: String) {
+            if (uri.startsWith("maoer-source://")) {
+                uri.removePrefix("maoer-source://").toIntOrNull()?.takeIf { it in citations }?.let(onCitation)
+            } else if (uri.startsWith("https://") || uri.startsWith("http://")) runCatching { original.openUri(uri) }
+        }
+    }
+    CompositionLocalProvider(LocalUriHandler provides handler) {
     SelectionContainer {
-        Markdown(content = content, modifier = modifier, components = markdownComponents(
+        Markdown(content = rendered, modifier = modifier, components = markdownComponents(
             custom = { type, model ->
                 if (type == GFMElementTypes.TABLE) ReplyTable(model)
                 else Text(model.node.getTextInNode(model.content).toString())
             }
         ))
+    }
     }
 }
 

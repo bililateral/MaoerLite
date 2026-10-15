@@ -67,7 +67,10 @@ fun AgentConnection.validationError(): String? {
     val error: String = "", val retry_after: Int = 0, val version: Long = 0,
     val batch_completed: Int = 0, val batch_total: Int = 0,
     val summary_turns: Int = 0, val summary_pending: Int = 0,
+    val sources: List<JsonObject> = emptyList(), val search_hint: String = "",
 ) { val terminal get() = status in listOf("completed", "cancelled", "failed") }
+
+@Serializable data class AgentSourceText(val text: String = "", val complete: Boolean = false, val source_url: String = "")
 @Serializable data class AgentTurn(val id: String, val question: String, val run: AgentRun? = null)
 @Serializable data class AgentHistory(val conversationId: String = agentId(), val turns: List<AgentTurn> = emptyList(), val cancelPending: String? = null, val deletePending: Boolean = false,
                                      val starterQuestions: List<String> = emptyList())
@@ -96,6 +99,8 @@ fun agentId(): String {
 }
 
 fun agentError(code: String): String = when (code) {
+    "intent_unavailable" -> "暂时无法确认本轮查询范围，请重试；尚未执行工具"
+    "invalid_citation" -> "回答引用未能与实际资料对应，请重试生成"
     "ssh_host_key_changed" -> "服务器身份与已确认指纹不一致，连接已拒绝；请核对服务器后再更新指纹"
     "ssh_auth_failed" -> "SSH 用户名或密码错误，请在连接设置中修正"
     "ssh_connection_failed" -> "SSH 连接失败，请检查服务器地址、端口和内网或 VPN，随后恢复连接"

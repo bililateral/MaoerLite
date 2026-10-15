@@ -37,6 +37,7 @@ fun CategoryBrowser(
     railState: LazyListState,
     onOpenPodcast: (PodcastSource) -> Unit,
     modifier: Modifier = Modifier,
+    searchHint: String = "",
 ) {
     val ink = Color(0xFF292623)
     val accent = Color(0xFFB83D36)
@@ -55,7 +56,7 @@ fun CategoryBrowser(
     }
     Column(modifier.background(background)) {
         OutlinedTextField(value = query, onValueChange = onQueryChange, singleLine = true,
-            placeholder = { Text("节目、分类、拼音或首字母", fontSize = 14.sp) },
+            placeholder = { Text(if (searchHint.isBlank()) "节目、分类、拼音或首字母" else "猜你想搜：$searchHint", fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
             leadingIcon = { Icon(Icons.Default.Search, null) },
             trailingIcon = {
                 if (query.isNotEmpty()) IconButton(onClick = { onQueryChange("") }) {

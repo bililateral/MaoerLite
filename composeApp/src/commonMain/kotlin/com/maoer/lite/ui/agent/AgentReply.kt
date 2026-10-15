@@ -11,6 +11,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalUriHandler
@@ -18,6 +21,8 @@ import androidx.compose.ui.platform.UriHandler
 import com.mikepenz.markdown.compose.components.MarkdownComponentModel
 import com.mikepenz.markdown.compose.components.markdownComponents
 import com.mikepenz.markdown.m3.Markdown
+import com.mikepenz.markdown.m3.markdownTypography
+import com.mikepenz.markdown.model.markdownPadding
 import org.intellij.markdown.ast.getTextInNode
 import org.intellij.markdown.flavours.gfm.GFMElementTypes
 import org.intellij.markdown.flavours.gfm.GFMTokenTypes
@@ -41,7 +46,10 @@ internal fun AgentReply(content: String, modifier: Modifier = Modifier, citation
     }
     CompositionLocalProvider(LocalUriHandler provides handler) {
     SelectionContainer {
-        Markdown(content = rendered, modifier = modifier, components = markdownComponents(
+        Markdown(content = rendered, modifier = modifier,
+            typography = replyTypography(),
+            padding = markdownPadding(block = 4.dp, list = 2.dp, listItemBottom = 4.dp, indentList = 12.dp),
+            components = markdownComponents(
             custom = { type, model ->
                 if (type == GFMElementTypes.TABLE) ReplyTable(model)
                 else Text(model.node.getTextInNode(model.content).toString())
@@ -49,6 +57,20 @@ internal fun AgentReply(content: String, modifier: Modifier = Modifier, citation
         ))
     }
     }
+}
+
+/** Chat headings use emphasis, not display-sized type; all Markdown forms share this scale. */
+@Composable
+private fun replyTypography(tableHeader: Boolean = false) = MaterialTheme.typography.bodyLarge.copy(
+    fontSize = 16.sp, lineHeight = 26.sp, letterSpacing = 0.sp,
+    fontWeight = if (tableHeader) FontWeight.Medium else FontWeight.Normal,
+).let { body ->
+    val heading = body.copy(fontWeight = FontWeight.Medium)
+    markdownTypography(
+        h1 = heading, h2 = heading, h3 = heading, h4 = heading, h5 = heading, h6 = heading,
+        text = body, paragraph = body, ordered = body, bullet = body, list = body, quote = body,
+        code = body.copy(fontFamily = FontFamily.Monospace, fontSize = 14.sp, lineHeight = 22.sp),
+    )
 }
 
 /** This Compose-compatible library version parses GFM tables but needs a renderer. */
@@ -69,7 +91,9 @@ private fun ReplyTable(model: MarkdownComponentModel) {
                             .background(if (index == 0) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface)
                             .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant).padding(8.dp)) {
                             Markdown(content = cells.getOrNull(column)?.getTextInNode(model.content)?.toString()?.trim().orEmpty(),
-                                modifier = Modifier.fillMaxWidth())
+                                modifier = Modifier.fillMaxWidth(),
+                                typography = replyTypography(tableHeader = index == 0),
+                                padding = markdownPadding(block = 0.dp, list = 0.dp, listItemBottom = 4.dp, indentList = 12.dp))
                         }
                     }
                 }

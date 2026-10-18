@@ -5,7 +5,7 @@ from ipaddress import ip_address
 import secrets
 from urllib.parse import urlsplit
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_MODEL = 'deepseek-flash'
 DEFAULT_BASE_URL = 'https://api.deepseek.com'
 

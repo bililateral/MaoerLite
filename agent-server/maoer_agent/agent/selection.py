@@ -1,8 +1,8 @@
 """Selection evidence and confirmation policy; returns facts, not final replies."""
 import hashlib
 import json
-from agent_model import ModelFailure
-from agent_memory import last_turn, PLAYBACK_SNAPSHOT_TOOLS
+from maoer_agent.model.client import ModelFailure
+from maoer_agent.agent.memory import last_turn, PLAYBACK_SNAPSHOT_TOOLS
 
 
 def selection_identity_refresh(messages, calls, known, run_id):

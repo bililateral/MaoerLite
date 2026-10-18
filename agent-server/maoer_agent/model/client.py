@@ -5,10 +5,10 @@ import time
 import logging
 import httpx
 from pydantic import Field, model_validator
-from protocol import ChatRequest, Message
-from rate_limit import Throttle, upstream_failure_code
-from upstream_io import limited_upstream, sse_data, TOTAL_TIMEOUT
-from failure_details import timeout_kind
+from maoer_agent.api.protocol import ChatRequest, Message
+from maoer_agent.model.rate_limit import Throttle, upstream_failure_code
+from maoer_agent.model.transport import limited_upstream, sse_data, TOTAL_TIMEOUT
+from maoer_agent.model.failures import timeout_kind
 
 
 class ModelFailure(Exception):

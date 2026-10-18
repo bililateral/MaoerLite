@@ -23,6 +23,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import cafe.adriel.voyager.core.screen.Screen
 import cafe.adriel.voyager.navigator.LocalNavigator
 import com.maoer.lite.data.agent.*
@@ -52,7 +53,17 @@ object AgentScreen : Screen {
         val last = state.history.turns.lastOrNull()?.run
         val lastTurnId = state.history.turns.lastOrNull()?.id
         var replyHeight by remember(lastTurnId) { mutableIntStateOf(0) }
+        var answerTextHeight by remember(lastTurnId) { mutableIntStateOf(0) }
         val replyIndex = latestAgentItem(state.history.turns.size, last?.text?.isNotBlank() == true)
+        val jumpThreshold = with(LocalDensity.current) { 64.dp.roundToPx() }
+        val showAnswerStart by remember(lastTurnId, last?.status, replyIndex, jumpThreshold) {
+            derivedStateOf {
+                val viewport = list.layoutInfo.viewportEndOffset - list.layoutInfo.viewportStartOffset
+                last?.status == "completed" && viewport > 0 && answerTextHeight > viewport &&
+                    (list.firstVisibleItemIndex > replyIndex ||
+                        (list.firstVisibleItemIndex == replyIndex && list.firstVisibleItemScrollOffset > jumpThreshold))
+            }
+        }
         val pending = state.history.deletePending || state.history.turns.lastOrNull()?.let { it.run?.terminal != true } == true || state.history.cancelPending != null
         LaunchedEffect(state.ready) {
             if (state.ready && state.connected && pending && !state.working) session.reconnect()
@@ -100,8 +111,7 @@ object AgentScreen : Screen {
                         state.history.cancelPending != null -> "停止请求待同步"
                         last?.status == "retry_wait" -> "${agentError(last.error)}，等待 ${last.retry_after} 秒后重试"
                         last?.status == "summarizing" -> "正在整理较早对话…"
-                        last?.status == "awaiting_tools" -> if (last.batch_total > 1)
-                            "正在执行手机操作 ${last.batch_completed + 1}/${last.batch_total}" else "正在执行手机操作"
+                        last?.status == "awaiting_tools" -> agentWorkLabel(last)
                         state.working -> agentWorkLabel(last)
                         last?.status == "failed" -> agentError(last)
                         last?.status == "cancelled" -> "已停止；已执行的操作保持实际状态"
@@ -115,7 +125,7 @@ object AgentScreen : Screen {
                     else if (pending || (last?.status == "failed" && last.error != "tool_round_limit")) TextButton(onClick = { session.reconnect(retry = last?.status == "failed") }) {
                         Text(if (last?.status == "failed") "重试当前步骤" else "恢复连接", color = accent)
                     }
-                    else if (last?.status == "completed" && last.text.isNotBlank()) TextButton(onClick = {
+                    else if (showAnswerStart) TextButton(onClick = {
                         followReplies = false
                         scope.launch { list.animateScrollToItem(replyIndex) }
                     }) { Text("跳转至回答开头", color = accent) }
@@ -164,7 +174,9 @@ object AgentScreen : Screen {
                         val run = turn.run
                         var selectedSource by remember(turn.id) { mutableStateOf<Int?>(null) }
                         if (run != null) {
-                            if (run.text.isNotBlank()) Surface(color = Color.White, shape = RoundedCornerShape(18.dp), modifier = Modifier.padding(top = 10.dp)) {
+                            if (run.text.isNotBlank()) Surface(color = Color.White, shape = RoundedCornerShape(18.dp), modifier = Modifier.padding(top = 10.dp).onSizeChanged {
+                                if (turn.id == lastTurnId) answerTextHeight = it.height
+                            }) {
                                 AgentReply(run.text, Modifier.fillMaxWidth().padding(14.dp),
                                     run.sources.mapNotNull { it["number"]?.jsonPrimitive?.intOrNull }.toSet()) {
                                         followReplies = false

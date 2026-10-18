@@ -6,7 +6,7 @@ import io.ktor.client.network.sockets.SocketTimeoutException
 import io.ktor.utils.io.errors.IOException
 import kotlinx.serialization.SerializationException
 
-/** Messages have a single source: agent-server/error_catalog.json. */
+/** Messages have a single source: agent-server/maoer_agent/resources/error_catalog.json. */
 fun errorText(code: String, vararg parameters: Pair<String, Any?>): String {
     val safeCode = code.takeIf { it.matches(Regex("[a-z][a-z0-9_]{0,79}")) } ?: "unknown"
     val values = mapOf("code" to safeCode) + parameters.toMap()

@@ -8,11 +8,12 @@ import httpx
 import sqlite3
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from importlib.resources import files
 from urllib.parse import urlsplit
-from research_store import digest
-from error_messages import error_message
+from maoer_agent.research.store import digest
+from maoer_agent.core.errors import error_message
 
-CATALOG = json.loads(Path(__file__).with_name('research_catalog.json').read_text(encoding='utf-8'))
+CATALOG = json.loads(files('maoer_agent.resources').joinpath('research_catalog.json').read_text(encoding='utf-8'))
 CONTENT = '{http://purl.org/rss/1.0/modules/content/}encoded'
 
 

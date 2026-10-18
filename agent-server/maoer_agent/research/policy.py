@@ -2,9 +2,9 @@
 import json
 from dataclasses import replace
 from datetime import datetime, timezone, timedelta
-from agent_model import ModelFailure
+from maoer_agent.model.client import ModelFailure
 
-from agent_tools import scoped_tools
+from maoer_agent.tools.definitions import scoped_tools
 
 PODCAST_TOOLS = scoped_tools('podcast')
 WEB_TOOLS = scoped_tools('web')

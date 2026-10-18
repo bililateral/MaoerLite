@@ -4,7 +4,7 @@ from urllib.parse import urlsplit
 from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from config import Settings
+from maoer_agent.core.config import Settings
 
 
 class StrictModel(BaseModel):

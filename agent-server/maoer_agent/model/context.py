@@ -1,7 +1,7 @@
 """Bounded model view. Never mutate execution evidence or provider reasoning chains."""
 from copy import deepcopy
 import json
-from agent_model import ModelFailure
+from maoer_agent.model.client import ModelFailure
 
 
 def size(messages, tools, output_tokens):

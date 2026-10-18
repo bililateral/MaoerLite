@@ -12,12 +12,12 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
 
-from config import ROOT, Settings
-from protocol import ChatRequest, public_response
-from rate_limit import Throttle, upstream_failure_code
-from model_gate import Gate
-from failure_details import timeout_kind
-from upstream_io import MAX_BODY, TOTAL_TIMEOUT, read_request, connected_operation, limited_upstream, sse_data
+from maoer_agent.core.config import ROOT, Settings
+from maoer_agent.api.protocol import ChatRequest, public_response
+from maoer_agent.model.rate_limit import Throttle, upstream_failure_code
+from maoer_agent.model.gate import Gate
+from maoer_agent.model.failures import timeout_kind
+from maoer_agent.model.transport import MAX_BODY, TOTAL_TIMEOUT, read_request, connected_operation, limited_upstream, sse_data
 
 LOG = logging.getLogger('maoer.agent')
 
@@ -39,7 +39,7 @@ def create_app(settings: Settings, transport=None, agent_db=None):
             trust_env=False, transport=transport,
         ) as client:
             app.state.client = client
-            from agent_tasks import task_service
+            from maoer_agent.agent.tasks import task_service
             async with task_service(app, settings, agent_db or ROOT / '.local/agent-tasks.sqlite3') as tasks:
                 app.state.agent = tasks
                 yield
@@ -47,7 +47,7 @@ def create_app(settings: Settings, transport=None, agent_db=None):
     app = FastAPI(title='Maoer Local Agent', docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     gate = Gate(settings.model_requests_per_minute)
     app.state.gate = gate
-    from agent_routes import register
+    from maoer_agent.api.routes import register
     register(app, settings)
 
     @app.get('/healthz')

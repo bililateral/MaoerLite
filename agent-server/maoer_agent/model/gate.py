@@ -1,7 +1,7 @@
 """Admission and upstream cooldown shared by both model entry points."""
 from collections import deque
 import time
-from rate_limit import RateLimitPolicy
+from maoer_agent.model.rate_limit import RateLimitPolicy
 
 
 class Gate:

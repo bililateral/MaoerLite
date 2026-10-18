@@ -1,9 +1,9 @@
 """Single message source shared with the Android build. No provider text passthrough."""
 import json
 import re
-from pathlib import Path
+from importlib.resources import files
 
-MESSAGES = json.loads(Path(__file__).with_name('error_catalog.json').read_text(encoding='utf-8'))
+MESSAGES = json.loads(files('maoer_agent.resources').joinpath('error_catalog.json').read_text(encoding='utf-8'))
 
 
 def error_message(code, **parameters):

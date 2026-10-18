@@ -2,8 +2,8 @@
 import hashlib
 import json
 from langgraph.types import Command
-from task_state import TaskConflict, READ_ONLY
-from tool_results import checked_result
+from maoer_agent.agent.state import TaskConflict, READ_ONLY
+from maoer_agent.tools.results import checked_result
 
 
 class ToolDispatcher:

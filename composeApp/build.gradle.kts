@@ -25,14 +25,14 @@ abstract class GenerateErrorCatalog : DefaultTask() {
         fun literal(value: String) = JsonOutput.toJson(value).replace("$", "\\$")
         val target = destination.get().file("com/maoer/lite/data/error/GeneratedErrorCatalog.kt").asFile
         target.parentFile.mkdirs()
-        target.writeText("// Generated from agent-server/error_catalog.json. Do not edit.\n" +
+        target.writeText("// Generated from agent-server/maoer_agent/resources/error_catalog.json. Do not edit.\n" +
             "package com.maoer.lite.data.error\n\ninternal val errorMessages: Map<String, String> = mapOf(\n" +
             entries.entries.joinToString(",\n") { (key, value) -> "    ${literal(key)} to ${literal(value)}" } + "\n)\n")
     }
 }
 val generatedErrors = layout.buildDirectory.dir("generated/errorCatalog/kotlin")
 val generateErrorCatalog by tasks.registering(GenerateErrorCatalog::class) {
-    catalog.set(rootProject.layout.projectDirectory.file("agent-server/error_catalog.json"))
+    catalog.set(rootProject.layout.projectDirectory.file("agent-server/maoer_agent/resources/error_catalog.json"))
     destination.set(generatedErrors)
 }
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask<*>>().configureEach {

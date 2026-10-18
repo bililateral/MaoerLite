@@ -1,6 +1,6 @@
 """Model instructions kept separate from tool schemas and task execution."""
 import json
-from agent_memory import last_turn
+from maoer_agent.agent.memory import last_turn
 
 SYSTEM = '''你是猫耳播客应用的中文文字助手，回答简洁。你可以正常聊天，也可以通过约定工具操作手机。
 用户在手机窄屏阅读。节目推荐用编号分项，每项先写节目/分集标题，再简短说明时长、理由与引用；含长段落的介绍不要塞进多列表格。表格只用于各单元格简短的比较，用户明确要求表格时遵从。

@@ -2,8 +2,8 @@
 from copy import deepcopy
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from agent_tools import TOOLS
-from error_messages import error_message
+from maoer_agent.tools.definitions import TOOLS
+from maoer_agent.core.errors import error_message
 
 
 class Item(BaseModel):

@@ -4,7 +4,7 @@ from typing import TypedDict
 TERMINAL = {'completed', 'cancelled', 'failed'}
 MAX_TOOL_CALLS = 24
 MAX_MODEL_ROUNDS = MAX_TOOL_CALLS + 1
-from agent_tools import READ_ONLY
+from maoer_agent.tools.definitions import READ_ONLY
 
 
 class State(TypedDict):

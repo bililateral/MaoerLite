@@ -9,15 +9,15 @@ import sqlite3
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.types import Command
 from langsmith import tracing_context
-from agent_model import ModelFailure, generate
-from agent_prompts import SYSTEM, selection_policy
-from agent_memory import context, last_turn
-from agent_graph import AgentGraph
-from tool_results import outcome_facts
-from task_store import Store
-from task_state import State, TaskConflict, TERMINAL, MAX_TOOL_CALLS, MAX_MODEL_ROUNDS, READ_ONLY
-from tool_dispatch import ToolDispatcher
-from selection_policy import selection_identity_refresh, playback_preflight, episode_selection_question
+from maoer_agent.model.client import ModelFailure, generate
+from maoer_agent.agent.prompts import SYSTEM, selection_policy
+from maoer_agent.agent.memory import context, last_turn
+from maoer_agent.agent.graph import AgentGraph
+from maoer_agent.tools.results import outcome_facts
+from maoer_agent.storage.tasks import Store
+from maoer_agent.agent.state import State, TaskConflict, TERMINAL, MAX_TOOL_CALLS, MAX_MODEL_ROUNDS, READ_ONLY
+from maoer_agent.tools.dispatch import ToolDispatcher
+from maoer_agent.agent.selection import selection_identity_refresh, playback_preflight, episode_selection_question
 
 
 class AgentTasks:
@@ -32,7 +32,7 @@ class AgentTasks:
             self.model = partial(model, app)
         self.jobs = {}
         self.dispatcher = ToolDispatcher(store, self.get_run, self.jobs, self.launch)
-        from research_tools import ResearchTools
+        from maoer_agent.research.tools import ResearchTools
         self.research = ResearchTools(settings, app.state.client, store.path.parent / 'research.sqlite3')
         self.research.rss.start()
         self.graph = AgentGraph(settings, store, self.model, self.get_run, self.research).compile(saver)

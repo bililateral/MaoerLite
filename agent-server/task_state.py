@@ -23,6 +23,8 @@ class State(TypedDict):
     research: bool
     route: dict
     research_plan: list[dict]
+    route_rechecked: bool
+    identity_repairs: int
 
 
 

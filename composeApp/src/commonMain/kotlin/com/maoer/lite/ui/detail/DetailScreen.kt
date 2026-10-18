@@ -2,10 +2,11 @@ package com.maoer.lite.ui.detail
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Pause
@@ -20,7 +21,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import com.maoer.lite.ui.components.PodcastDescription
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.semantics
@@ -59,7 +62,11 @@ object DetailScreen : Screen {
         }
         
         val MaoerPink = Color(0xFFD32F2F)
-        val scrollState = rememberScrollState()
+        val scrollState = rememberLazyListState()
+        val coverSpace = with(LocalDensity.current) { 320.dp.toPx() }
+        val coverScroll by remember(coverSpace) { derivedStateOf {
+            if (scrollState.firstVisibleItemIndex == 0) scrollState.firstVisibleItemScrollOffset.toFloat() else coverSpace
+        } }
         
         val durationMs by playerManager.durationMs.collectAsState()
         val positionMs by playerManager.positionMs.collectAsState()
@@ -77,8 +84,8 @@ object DetailScreen : Screen {
                     .fillMaxWidth()
                     .height(400.dp)
                     .graphicsLayer {
-                        translationY = -scrollState.value * 0.5f
-                        alpha = 1f - (scrollState.value / 600f).coerceAtMost(0.6f)
+                        translationY = -coverScroll * 0.5f
+                        alpha = 1f - (coverScroll / 600f).coerceAtMost(0.6f)
                     }
             )
             
@@ -95,16 +102,17 @@ object DetailScreen : Screen {
             )
 
             // 4. 可滚动内容 (Scrollable Content)
-            Column(
+            LazyColumn(
+                state = scrollState,
                 modifier = Modifier
                     .fillMaxSize()
-                    .verticalScroll(scrollState)
+                    .statusBarsPadding()
             ) {
                 // 留白，让背景露出来
-                Spacer(Modifier.height(320.dp))
+                item { Spacer(Modifier.height(320.dp)) }
                 
                 // 内容卡片
-                Surface(
+                item { Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
                     color = MaterialTheme.colorScheme.surface
@@ -205,16 +213,19 @@ object DetailScreen : Screen {
                         Spacer(Modifier.height(16.dp))
                         PlaybackTools(playerManager)
                         Spacer(Modifier.height(32.dp))
-                        Text(
-                            audio.description.ifBlank { "本集暂无简介" },
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = Color.Gray
-                        )
-                        Spacer(Modifier.height(200.dp))
+                    }
+                } }
+                // Keep long descriptions in independently measured paragraphs.
+                items(audio.description.ifBlank { "本集暂无简介" }.split(Regex("\n{2,}"))) { paragraph ->
+                    Surface(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surface) {
+                        Box(Modifier.padding(horizontal = 24.dp, vertical = 6.dp)) { PodcastDescription(paragraph) }
                     }
                 }
+                item { Spacer(Modifier.fillMaxWidth().height(200.dp).background(MaterialTheme.colorScheme.surface)) }
             }
 
+            Box(Modifier.fillMaxWidth().windowInsetsTopHeight(WindowInsets.statusBars)
+                .background(MaterialTheme.colorScheme.surface))
             // 3. 顶部导航栏
             TopAppBar(
                 title = {},

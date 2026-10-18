@@ -1,6 +1,7 @@
 """Bounded conversation context and references derived only from device receipts."""
 from copy import deepcopy
 import json
+import re
 
 MAX_TURNS = 20
 MAX_HISTORY_MESSAGES = 80  # Separate from the current task's tool budget.
@@ -190,6 +191,21 @@ def context(completed):
     history, retained = [], 0
     for run in reversed(completed[-MAX_TURNS:]):
         group = task_turn(run)
+        if len(group) > MAX_HISTORY_MESSAGES or len(encoded(group)) > MAX_HISTORY_CHARS:
+            # Keep an oversized research turn's question and final answer.
+            # Executable IDs still come only from bounded reference memory.
+            calls = {c['id']: c['function']['name'] for m in group for c in m.get('tool_calls', [])}
+            outcomes = [{'tool': calls[m['tool_call_id']], 'status': json.loads(m['content']).get('status', 'unknown')}
+                        for m in group if m['role'] == 'tool' and m.get('tool_call_id') in calls]
+            answer = next((m.get('content') or '' for m in reversed(group)
+                           if m['role'] == 'assistant' and not m.get('tool_calls')), '')
+            old_citations = {str(s.get('number')) for s in run.get('sources', []) if type(s.get('number')) is int}
+            answer = re.sub(r'(?<!\!)\[(\d{1,3})\](?!\()',
+                            lambda m: '（此前资料）' if m[1] in old_citations else m[0], answer)
+            group = [{'role': 'user', 'content': run.get('input', {}).get('message') or
+                      next((m['content'] for m in group if m['role'] == 'user'), '')},
+                     {'role': 'assistant', 'content': '历史轮次精简记录（不是新的操作授权；原始工具正文省略，需新资料时重新查询）：' +
+                      encoded({'status': run['status'], 'answer': answer, 'tool_outcomes': outcomes})}]
         candidate = group + history
         if len(candidate) > MAX_HISTORY_MESSAGES or len(encoded(candidate)) > MAX_HISTORY_CHARS:
             break

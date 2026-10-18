@@ -22,40 +22,60 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.layout.onSizeChanged
 import cafe.adriel.voyager.core.screen.Screen
 import cafe.adriel.voyager.navigator.LocalNavigator
 import com.maoer.lite.data.agent.*
 import com.maoer.lite.ui.components.NowPlayingBar
 import com.maoer.lite.ui.podcast.PodcastScreen
 import kotlinx.serialization.json.*
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.filter
 import org.koin.compose.koinInject
 
 object AgentScreen : Screen {
-    @OptIn(ExperimentalMaterial3Api::class)
+    @OptIn(ExperimentalMaterial3Api::class, FlowPreview::class)
     @Composable override fun Content() {
         val session = koinInject<AgentSession>()
         val state by session.state.collectAsState()
         val navigator = LocalNavigator.current
         var input by rememberSaveable(state.history.conversationId) { mutableStateOf("") }
+        var inputError by rememberSaveable(state.history.conversationId) { mutableStateOf<String?>(null) }
         var settings by remember { mutableStateOf(false) }
         val list = rememberLazyListState()
+        val scope = rememberCoroutineScope()
         val dragging by list.interactionSource.collectIsDraggedAsState()
         var followReplies by remember { mutableStateOf(true) }
         val accent = Color(0xFFB83D36)
         val last = state.history.turns.lastOrNull()?.run
+        val lastTurnId = state.history.turns.lastOrNull()?.id
+        var replyHeight by remember(lastTurnId) { mutableIntStateOf(0) }
+        val replyIndex = latestAgentItem(state.history.turns.size, last?.text?.isNotBlank() == true)
         val pending = state.history.deletePending || state.history.turns.lastOrNull()?.let { it.run?.terminal != true } == true || state.history.cancelPending != null
         LaunchedEffect(state.ready) {
             if (state.ready && state.connected && pending && !state.working) session.reconnect()
         }
         LaunchedEffect(dragging) {
             if (dragging) followReplies = false
-            else if (!list.canScrollForward) followReplies = true
         }
-        LaunchedEffect(state.history.turns.size) { followReplies = true }
-        LaunchedEffect(state.history.turns.size, last?.version, followReplies) {
+        LaunchedEffect(lastTurnId) { followReplies = true }
+        // Anchor the question, then the beginning of its first answer. Progress,
+        // citations and later streaming updates must not drag the reader away.
+        LaunchedEffect(lastTurnId, last?.text?.isNotBlank(), last?.terminal, followReplies) {
             if (followReplies && !dragging && state.history.turns.isNotEmpty()) {
-                withFrameNanos { }
-                list.scrollToItem(state.history.turns.size)
+                if (last?.terminal == true) {
+                    list.scrollToItem(replyIndex)
+                    // Markdown can finish measuring after the terminal event.
+                    // Settle layout changes without cancelling the scroll each frame.
+                    snapshotFlow { replyHeight }.filter { it > 0 }.debounce(150).collect {
+                        list.scrollToItem(replyIndex)
+                    }
+                } else {
+                    withFrameNanos { }
+                    list.scrollToItem(replyIndex)
+                }
             }
         }
         Scaffold(containerColor = Color(0xFFFAF7F2), topBar = {
@@ -82,7 +102,7 @@ object AgentScreen : Screen {
                         last?.status == "summarizing" -> "正在整理较早对话…"
                         last?.status == "awaiting_tools" -> if (last.batch_total > 1)
                             "正在执行手机操作 ${last.batch_completed + 1}/${last.batch_total}" else "正在执行手机操作"
-                        state.working -> "正在回复…"
+                        state.working -> agentWorkLabel(last)
                         last?.status == "failed" -> agentError(last)
                         last?.status == "cancelled" -> "已停止；已执行的操作保持实际状态"
                         !state.connected -> "请通过右上角设置连接服务"
@@ -95,13 +115,24 @@ object AgentScreen : Screen {
                     else if (pending || (last?.status == "failed" && last.error != "tool_round_limit")) TextButton(onClick = { session.reconnect(retry = last?.status == "failed") }) {
                         Text(if (last?.status == "failed") "重试当前步骤" else "恢复连接", color = accent)
                     }
+                    else if (last?.status == "completed" && last.text.isNotBlank()) TextButton(onClick = {
+                        followReplies = false
+                        scope.launch { list.animateScrollToItem(replyIndex) }
+                    }) { Text("跳转至回答开头", color = accent) }
                 }
+                if (state.working) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(2.dp))
                 NowPlayingBar()
                 Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.Bottom) {
-                    OutlinedTextField(value = input, onValueChange = { if (it.length <= 2000) input = it },
+                    OutlinedTextField(value = input, onValueChange = {
+                        if (it.length <= 2000) { input = it; inputError = null }
+                        else inputError = "最多输入2000个字符，本次内容未替换草稿"
+                    }, isError = inputError != null,
+                        supportingText = if (inputError != null || input.length > 1600) {
+                            { Text(inputError ?: "${input.length}/2000") }
+                        } else null,
                         placeholder = { Text("想听什么，告诉我") }, maxLines = 4, modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(22.dp))
-                    IconButton(onClick = { session.send(input); input = "" }, enabled = state.ready && state.connected && !state.working && !pending && input.isNotBlank()) {
+                    IconButton(onClick = { session.send(input); input = ""; inputError = null }, enabled = state.ready && state.connected && !state.working && !pending && input.isNotBlank()) {
                         Icon(Icons.AutoMirrored.Filled.Send, "发送消息", tint = if (state.connected && !pending && !state.working) accent else Color.Gray)
                     }
                 }
@@ -118,26 +149,39 @@ object AgentScreen : Screen {
                 }
             } else LazyColumn(state = list, modifier = Modifier.fillMaxSize().padding(padding),
                 contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                items(state.history.turns, key = { it.id }) { turn ->
-                    Column(Modifier.fillMaxWidth()) {
-                        Surface(color = Color(0xFFF1E3DC), shape = RoundedCornerShape(18.dp), modifier = Modifier.align(Alignment.End)) {
+                state.history.turns.forEach { turn ->
+                    item(key = "question-${turn.id}") {
+                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopEnd) {
+                        Surface(color = Color(0xFFF1E3DC), shape = RoundedCornerShape(18.dp)) {
                             Text(turn.question, Modifier.padding(14.dp))
                         }
+                        }
+                    }
+                    item(key = "answer-${turn.id}") {
+                    Column(Modifier.fillMaxWidth().onSizeChanged {
+                        if (turn.id == lastTurnId) replyHeight = it.height
+                    }) {
                         val run = turn.run
                         var selectedSource by remember(turn.id) { mutableStateOf<Int?>(null) }
                         if (run != null) {
                             if (run.text.isNotBlank()) Surface(color = Color.White, shape = RoundedCornerShape(18.dp), modifier = Modifier.padding(top = 10.dp)) {
                                 AgentReply(run.text, Modifier.fillMaxWidth().padding(14.dp),
-                                    run.sources.mapNotNull { it["number"]?.jsonPrimitive?.intOrNull }.toSet()) { selectedSource = it }
+                                    run.sources.mapNotNull { it["number"]?.jsonPrimitive?.intOrNull }.toSet()) {
+                                        followReplies = false
+                                        selectedSource = it
+                                    }
                             }
-                            AgentSources(run, session, selectedSource, { selectedSource = it },
+                            AgentSources(run, session, selectedSource, { followReplies = false; selectedSource = it },
+                                onInteraction = { followReplies = false },
                                 openPodcast = { navigator?.push(PodcastScreen(it)) },
                                 selectEpisode = { card ->
                                     val podcast = card.text("podcast_title")
                                     val title = card.text("title")
                                     input = if (podcast.isBlank()) "请播放《$title》这一集" else "请播放《$podcast》的《$title》这一集"
+                                    inputError = null
                                 }, enabled = !state.working)
                         }
+                    }
                     }
                 }
                 item(key = "conversation-end") { Spacer(Modifier.height(1.dp)) }

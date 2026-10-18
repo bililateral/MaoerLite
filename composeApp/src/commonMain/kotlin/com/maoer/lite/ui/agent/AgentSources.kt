@@ -17,6 +17,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.style.TextOverflow
 import com.maoer.lite.data.agent.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.*
@@ -33,6 +34,7 @@ internal fun visibleSources(run: AgentRun): List<JsonObject> = run.sources.ifEmp
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun AgentSources(run: AgentRun, session: AgentSession, selected: Int?, onSelected: (Int?) -> Unit,
+                         onInteraction: () -> Unit,
                           openPodcast: (String) -> Unit, selectEpisode: (JsonObject) -> Unit, enabled: Boolean) {
     val sources = remember(run.sources, run.results) { visibleSources(run) }
     val candidates = remember(run.text, run.results) {
@@ -49,20 +51,23 @@ internal fun AgentSources(run: AgentRun, session: AgentSession, selected: Int?, 
     LaunchedEffect(selected) { if (selected != null) expanded = true }
     Surface(color = Color.White, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
         Column(Modifier.padding(12.dp)) {
-            TextButton(onClick = { expanded = !expanded; if (!expanded) onSelected(null) }) {
+            TextButton(onClick = { onInteraction(); expanded = !expanded; if (!expanded) onSelected(null) }) {
                 Text("${if (expanded) "▾" else "▸"} 资料来源 · ${sources.size} 条" + if (candidates.isNotEmpty()) " · 节目候选 ${candidates.size}" else "")
             }
             if (expanded) {
                 sources.forEach { source ->
                     val number = source["number"]?.jsonPrimitive?.intOrNull
                     val bring = remember { BringIntoViewRequester() }
+                    var fullPreview by remember(run.id, source) { mutableStateOf(false) }
+                    val evidence = source.text("evidence")
                     LaunchedEffect(expanded, selected) {
                         if (number != null && selected == number) { withFrameNanos { }; bring.bringIntoView() }
                     }
-                    Column(Modifier.fillMaxWidth().bringIntoViewRequester(bring)
+                    Column(Modifier.fillMaxWidth()
                         .background(if (number != null && selected == number) Color(0xFFFFF1DB) else Color.Transparent)
                         .padding(vertical = 10.dp, horizontal = 4.dp)) {
-                        Text((number?.let { "[$it] " } ?: "") + source.text("title"), style = MaterialTheme.typography.titleSmall)
+                        Text((number?.let { "[$it] " } ?: "") + source.text("title"),
+                            modifier = Modifier.bringIntoViewRequester(bring), style = MaterialTheme.typography.titleSmall)
                         val used = number != null && Regex("\\[$number\\](?!\\()") .containsMatchIn(run.text)
                         Text(if (used) "回答引用" else "其他检索资料", fontSize = 11.sp, color = Color.Gray)
                         if (source.text("podcast_title").isNotBlank()) Text(source.text("podcast_title"), fontSize = 12.sp)
@@ -74,11 +79,9 @@ internal fun AgentSources(run: AgentRun, session: AgentSession, selected: Int?, 
                             "recent_cache" -> "近期缓存资料"
                             else -> "检索时取得的资料"
                         }, fontSize = 11.sp, color = Color.Gray)
-                        SelectionContainer { Text(source.text("evidence"), fontSize = 14.sp, lineHeight = 21.sp) }
-                        if (source["evidence_truncated"]?.jsonPrimitive?.booleanOrNull == true) Text("以上为原文节选", fontSize = 11.sp, color = Color.Gray)
                         Row {
                             if (source.text("document_id").isNotBlank() && number != null)
-                                TextButton(onClick = { detail = source }) { Text("查看原文") }
+                                TextButton(onClick = { onInteraction(); detail = source }) { Text("查看原文") }
                             val url = source.text("original_url").ifBlank { source.text("source_url") }
                             if (url.startsWith("https://") || url.startsWith("http://"))
                                 TextButton(onClick = { runCatching { uri.openUri(url) }.onFailure { linkError = errorText("source_link_failed") } }) {
@@ -86,6 +89,16 @@ internal fun AgentSources(run: AgentRun, session: AgentSession, selected: Int?, 
                                 }
                         }
                         if (source.text("kind") == "episode") TextButton(onClick = { selectEpisode(source) }, enabled = enabled) { Text("选择这一集") }
+                        SelectionContainer {
+                            Text(if (fullPreview) evidence else evidence.take(480), fontSize = 14.sp, lineHeight = 21.sp,
+                                maxLines = if (fullPreview) Int.MAX_VALUE else 6, overflow = TextOverflow.Ellipsis)
+                        }
+                        if (source["evidence_truncated"]?.jsonPrimitive?.booleanOrNull == true)
+                            Text("资料为原文节选", fontSize = 11.sp, color = Color.Gray)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            TextButton(onClick = { onInteraction(); fullPreview = !fullPreview }) { Text(if (fullPreview) "收起节选" else "展开节选") }
+                            TextButton(onClick = { expanded = false; onSelected(null) }) { Text("收起资料") }
+                        }
                     }
                     HorizontalDivider()
                 }

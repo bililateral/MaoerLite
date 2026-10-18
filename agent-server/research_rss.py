@@ -16,8 +16,21 @@ CATALOG = json.loads(Path(__file__).with_name('research_catalog.json').read_text
 CONTENT = '{http://purl.org/rss/1.0/modules/content/}encoded'
 
 
-def plain(text):
-    return re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]*>', ' ', text))).strip()
+def plain(text, paragraphs=False):
+    if paragraphs:
+        text = re.sub(r'<(script|style)\b[^>]*>[\s\S]*?</\1\s*>', '', text, flags=re.I)
+        def anchor(match):
+            url, label = html.unescape(match[2]), match[3]
+            return f'{label} ({url})' if urlsplit(url).scheme in ('http', 'https') and label != url else label
+        text = re.sub(r'<a\b[^>]*href\s*=\s*(["\'])(.*?)\1[^>]*>([\s\S]*?)</a\s*>', anchor, text, flags=re.I)
+        text = re.sub(r'<br\s*/?>', '\n', text, flags=re.I)
+        text = re.sub(r'<li\b[^>]*>', '\n• ', text, flags=re.I)
+        text = re.sub(r'</?(p|div|section|h[1-6]|blockquote|ul|ol|li)\b[^>]*>', '\n\n', text, flags=re.I)
+    text = html.unescape(re.sub(r'<[^>]*>', ' ', text))
+    if not paragraphs:
+        return re.sub(r'\s+', ' ', text).strip()
+    text = re.sub(r'[^\S\n]+', ' ', text.replace('\r\n', '\n').replace('\r', '\n'))
+    return re.sub(r'\n{3,}', '\n\n', re.sub(r' *\n *', '\n', text)).strip()
 
 
 def parse_feed(raw, source):
@@ -34,7 +47,10 @@ def parse_feed(raw, source):
         if not name or urlsplit(audio).scheme not in ('http', 'https'): continue
         published = (item.findtext('pubDate') or '').strip()
         identity = (item.findtext('guid') or '').strip() or (f'{name}|{published}' if published else audio)
-        body = plain(item.findtext(CONTENT) or item.findtext('description') or '')
+        description = item.find(CONTENT)
+        if description is None or not ''.join(description.itertext()).strip(): description = item.find('description')
+        raw_body = (ET.tostring(description, encoding='unicode') if len(description) else description.text or '') if description is not None else ''
+        body = plain(raw_body, paragraphs=True)
         link = (item.findtext('link') or '').strip()
         result.append({'kind': 'episode', 'id': source['id'] + ':' + digest(identity), 'podcast_id': source['id'],
                        'title': name[:300], 'podcast_title': title[:150], 'published': published[:150],

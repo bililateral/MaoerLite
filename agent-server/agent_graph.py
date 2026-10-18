@@ -15,7 +15,7 @@ from agent_memory import last_turn, model_messages, references, remember, replay
 from agent_summary import MAX_BATCHES, SUMMARY_TIMEOUT, batch, parse_summary, summary_messages, with_summary
 from selection_policy import selection_identity_refresh, playback_preflight, episode_selection_question
 from task_state import State, MAX_TOOL_CALLS, MAX_MODEL_ROUNDS
-from research_policy import classify, allowed_tools, instructions
+from research_policy import classify, allowed_tools, instructions, DEVICE_TOOLS
 from research_rss import CATALOG
 from research_tools import SERVER_TOOLS
 from research_sources import annotate, citation_context, valid_citations, current_citation_view
@@ -191,6 +191,25 @@ class AgentGraph:
             message = await self.invoke_model(run_id, 'citation_repair', self.settings, repair, [], publish)
             if message.get('tool_calls') or not valid_citations(message.get('content'), self.get_run(run_id).get('sources', [])):
                 raise ModelFailure('invalid_citation')
+        route = state.get('route', {})
+        route_rechecked = state.get('route_rechecked', False)
+        disputed = {c['name'] for c in calls if c['name'] in DEVICE_TOOLS and c['name'] not in allowed}
+        if state.get('research') and disputed and not route_rechecked:
+            # A route is a lossy model classification, not evidence of authorization.
+            # Recheck once before any effect; never open controls on a failed recheck.
+            route_rechecked = True
+            self.store.update(run_id, phase='intent')
+            async def route_model(settings, messages, tools, publish):
+                return await self.invoke_model(run_id, 'intent_recheck', settings, messages, tools, publish)
+            try:
+                checked = await classify(route_model, self.settings, state['messages'], [], disputed)
+                route = {**route, 'device': route.get('device', False) or checked['device']}
+                allowed = allowed_tools(route) - {'search_podcast_content'}
+                self.store.update(run_id, route=route)
+            except ModelFailure as exc:
+                if exc.code == 'model_attempt_budget_exhausted':
+                    raise
+        invalid_identities = {}
         if calls:
             # No tool is dispatched until complete model output and validation.
             known = list(references(state.get('memory', {})))
@@ -211,16 +230,17 @@ class AgentGraph:
                     (call['name'] == 'search_podcast_content' and args.get('podcast_id'))) and not any(
                         (item.get('id') == args['podcast_id'] and item.get('kind') == 'podcast') or
                         (item.get('podcast_id') == args['podcast_id'] and item.get('kind') == 'episode') for item in known):
-                    raise ModelFailure('unverified_podcast_id')
+                    invalid_identities[call['id']] = 'unverified_podcast_id'
                 if call['name'] in ('play_episode', 'read_episode_description') and not any(
                         item.get('id') == args['episode_id'] and item.get('podcast_id') == args['podcast_id']
                         and item.get('kind') == 'episode' for item in known):
-                    raise ModelFailure('unverified_episode_id')
+                    invalid_identities[call['id']] = 'unverified_episode_id'
             ids = [c['id'] for c in calls]
             seen = {c['id'] for m in state['messages'] for c in m.get('tool_calls', [])}
             if any(not i or i in seen for i in ids):
                 raise ModelFailure('invalid_tool_call')
-            executable = [c for c in calls if not episode_selection_question(state['messages'], [c])]
+            executable = [c for c in calls if c['id'] not in invalid_identities and
+                          c['name'] in allowed and not episode_selection_question(state['messages'], [c])]
             refresh = playback_preflight(state['messages'], executable, run_id, state['rounds'])
             if refresh:
                 if any(call['id'] in seen for call in refresh):
@@ -240,10 +260,19 @@ class AgentGraph:
         deferred = []
         executable = []
         research_plan = []
+        identity_rejections = 0
         for call in calls:
             if call['name'] not in allowed:
                 deferred.append(self.record_result(run_id, {'call_id': call['id'], 'result': {
                     'status': 'error', 'executed': False, 'code': 'tool_not_allowed', 'note': error_message('tool_not_allowed')}}))
+                continue
+            if call['id'] in invalid_identities:
+                identity_rejections += 1
+                # No phone/research request has been sent for this call. Pair the
+                # rejected plan with feedback so normal search can establish IDs.
+                deferred.append(self.record_result(run_id, {'call_id': call['id'], 'result': {
+                    'status': 'error', 'executed': False, 'code': invalid_identities[call['id']],
+                    'note': '身份尚未核实，本调用未执行。先用search_catalog核对节目，再用list_episodes或search_rss取得真实分集ID；同批查询不能为本批其他调用提供身份。不得猜测ID或重放控制。'}}))
                 continue
             if call['name'] in SERVER_TOOLS:
                 research_plan.append(call)
@@ -260,10 +289,13 @@ class AgentGraph:
             messages += [{'role': 'tool', 'tool_call_id': r['call_id'],
                           'content': json.dumps(r['result'], ensure_ascii=False)} for r in deferred]
         memory = remember(state.get('memory', {}), run_id, calls, deferred) if deferred else state.get('memory', {})
+        identity_repairs = state.get('identity_repairs', 0) + bool(identity_rejections)
         return {'messages': messages, 'rounds': state['rounds'] + 1,
                 'calls': executable, 'research_plan': research_plan,
                 'deferred_results': deferred if executable or research_plan else [],
-                'tool_count': count + len(calls), 'memory': memory}
+                'tool_count': count + len(calls), 'memory': memory, 'route': route,
+                'route_rechecked': route_rechecked, 'identity_repairs': identity_repairs,
+                'final_only': final_only or identity_repairs >= 2}
 
 
     async def research_node(self, state):

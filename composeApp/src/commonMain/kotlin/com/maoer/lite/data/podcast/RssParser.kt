@@ -7,7 +7,7 @@ import okio.ByteString.Companion.encodeUtf8
 
 /** RSS semantics stay in commonMain. The generic XML reader is shared across platforms. */
 class RssParser {
-    private data class Node(val name: String, val ns: String, val value: StringBuilder = StringBuilder())
+    private data class Node(val name: String, val ns: String, val href: String = "", val value: StringBuilder = StringBuilder())
     private class Entry {
         var guid = ""; var title = ""; var url = ""; var description = ""
         var cover = ""; var published = ""; var duration = 0L
@@ -28,7 +28,8 @@ class RssParser {
                 when (reader.next()) {
                     EventType.START_ELEMENT -> {
                         require(stack.size < 64) { errorText("rss_structure_too_deep") }
-                        val node = Node(reader.localName, reader.namespaceURI)
+                        val node = Node(reader.localName, reader.namespaceURI,
+                            if (reader.localName.equals("a", true)) safeUrl(reader.getAttributeValue(null, "href").orEmpty()) else "")
                         val parent = stack.lastOrNull()?.name
                         stack.add(node)
                         if (node.name == "channel" && parent == "rss") channelFound = true
@@ -80,7 +81,15 @@ class RssParser {
                             }
                             entry = null
                         } else if (parent != null && parent.value.length < 32_768) {
-                            parent.value.append(" ").append(value.take(32_768 - parent.value.length))
+                            val block = when (node.name.lowercase()) {
+                                "script", "style" -> ""
+                                "a" -> if (node.href.isBlank() || value == node.href) value else "$value (${node.href})"
+                                "br" -> "\n"
+                                "li" -> "• $value\n"
+                                "p", "div", "section", "h1", "h2", "h3", "h4", "blockquote", "ul", "ol" -> "$value\n\n"
+                                else -> " $value"
+                            }
+                            parent.value.append(block.take(32_768 - parent.value.length))
                         }
                     }
                     EventType.DOCDECL -> error(errorText("rss_xml_entities_unsupported"))
@@ -115,10 +124,23 @@ class RssParser {
             it.startsWith("https://", true) || it.startsWith("http://", true)
         }.orEmpty()
         fun plainText(value: String): String = value
+            .replace(Regex("<(script|style)\\b[^>]*>[\\s\\S]*?</\\1\\s*>", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("<!--([\\s\\S]*?)-->"), "")
+            .replace(Regex("<a\\b[^>]*href\\s*=\\s*([\"'])(.*?)\\1[^>]*>([\\s\\S]*?)</a\\s*>", RegexOption.IGNORE_CASE)) {
+                val url = safeUrl(it.groupValues[2])
+                val label = it.groupValues[3]
+                if (url.isBlank() || label == url) label else "$label ($url)"
+            }
+            .replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), "\n")
+            .replace(Regex("<li\\b[^>]*>", RegexOption.IGNORE_CASE), "\n• ")
+            .replace(Regex("</?(p|div|section|h[1-6]|blockquote|ul|ol|li)\\b[^>]*>", RegexOption.IGNORE_CASE), "\n\n")
             .replace(Regex("<[^>]*>"), " ")
             .replace("&nbsp;", " ").replace("&amp;", "&")
             .replace("&quot;", "\"").replace("&#39;", "'")
             .replace("&lt;", "<").replace("&gt;", ">")
-            .replace(Regex("\\s+"), " ").trim().take(16_384)
+            .replace("\r\n", "\n").replace('\r', '\n')
+            .replace(Regex("[^\\S\\n]+"), " ")
+            .replace(Regex(" *\n *"), "\n")
+            .replace(Regex("\n{3,}"), "\n\n").trim().take(16_384)
     }
 }

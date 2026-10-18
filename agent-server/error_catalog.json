@@ -1,6 +1,6 @@
 {
   "tool_result_unverified": "已收到执行回执，但结果字段不足或不一致，无法确认效果；不会自动重复操作",
-  "research_result_unknown": "上次资料查询已开始，但未保存完整结果；为避免重复消耗额度，本次不重复请求",
+  "research_result_unknown": "这次资料查询没能取得完整结果，暂时无法完成核实",
   "context_budget_exhausted": "本次资料和推理内容超过安全输入预算，已保留执行记录；请缩小问题范围继续",
   "model_attempt_budget_exhausted": "本次任务的模型请求次数已达到上限，已保留执行记录；请缩小问题范围继续",
   "intent_unavailable": "暂时无法确认本轮查询范围，请重试；尚未执行工具",

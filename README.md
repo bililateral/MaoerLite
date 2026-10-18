@@ -8,19 +8,16 @@ MaoerLite 是一款以公开 RSS 为内容入口的 Android 播客点播器。�
 
 ## 页面预览
 
-当前安装版本的五张真机预览见[2026-10-18修复实拍](#2026-10-18-点播助手与阅读体验修复)。下面保留的较早截图均为注明日期的历史阶段，不作为当前修改页面的外观依据。
+当前版本的九张无状态栏真机示意图见[当前真机预览](#current-preview)。下列首页与表格也由2026-10-18当前APK重新采集；随后标明日期的模拟器图片保留历史阶段，模拟器不受无状态栏规则限制。
 
-2026-10-15 首页布局调整阶段的真机截图如下（本轮修复实拍见文末）：精选标签独立放在封面上方，不遮挡 GIADA。其余页面图保留原采集日期，属于历史阶段；旧聊天资料卡不代表新版折叠资料区。节目数量、分集与封面内容以 RSS 实际返回为准。
-
-| 首页布局调整阶段：精选标签独立占位 |
+| 当前真机首页：精选标签独立占位 |
 | --- |
-| <img src="docs/screenshots/home-featured-realme-2026-10-15.png" alt="2026-10-15真机首页，精选标签在封面上方，与GIADA文字分离，播放栏位于底部导航上方" width="360"> |
-| Realme GT8，正式包名覆盖安装后的实际界面。 |
+| <img src="docs/screenshots/device-home-nostatus-2026-10-18.png" alt="2026-10-18当前真机首页，精选标签在封面上方，底部播放栏和导航独立占位，无系统状态栏" width="360"> |
 
-| 历史聊天页：两列表格（2026-09-27） |
+| 当前真机聊天：两列表格排版 |
 | --- |
-| <img src="docs/screenshots/agent-markdown-realme-gt8.png" alt="Realme GT8正式点播助手页面展示真实模型返回的两列表格，播放栏与输入框分别占位" width="360"> |
-| 2026-09-27：独立测试对话的真实回复在正式聊天页展示；长表格可纵向阅读，多列超宽时可横向滑动。截图后恢复原聊天记录。 |
+| <img src="docs/screenshots/device-agent-table-nostatus-2026-10-18.png" alt="2026-10-18当前APK真实模型返回两列表格，仅为排版样例，无系统状态栏" width="360"> |
+| 本轮中文请求在当前聊天保留，表格文字仅作排版示意，不替代内容事实核验。 |
 
 | 杂志风首页 | 分类浏览 |
 | --- | --- |
@@ -191,7 +188,7 @@ Tavily密钥仅保存在服务端私密配置，部署须使用免费账户并�
 
 音频转写、ASR/TTS、收藏和下载控制不在本轮范围。目录搜索仍匹配节目名、分类、中文及拼音；新增RSS语义能力仅用于助手资料查询。播放前手机刷新、真实身份核对、选集确认、工具去重与原队列规则保持。节目目录统计仍由既有查询工具提供，不使用语义检索命中数量代替RSS总量。
 
-向量模型为 [BAAI/bge-small-zh-v1.5](https://huggingface.co/BAAI/bge-small-zh-v1.5)（MIT），通过 fastembed 0.7.4 在CPU运行。目录清单位于`agent-server/research_catalog.json`，修改内置节目时须与Android目录、分类和拼音表同步。用户新建对话删除会话任务、来源关联和搜索提示，公共RSS缓存不作为个人记忆。
+向量模型为 [BAAI/bge-small-zh-v1.5](https://huggingface.co/BAAI/bge-small-zh-v1.5)（MIT），通过 fastembed 0.7.4 在CPU运行。目录清单位于`agent-server/maoer_agent/resources/research_catalog.json`，修改内置节目时须与Android目录、分类和拼音表同步。用户新建对话删除会话任务、来源关联和搜索提示，公共RSS缓存不作为个人记忆。
 
 ## 技术组成
 
@@ -266,33 +263,38 @@ composeApp/src/
 └── iosMain/                # iOS 工程入口与平台接口存根
 gradle/libs.versions.toml   # 依赖版本
 iosApp/                    # iOS 宿主工程
-agent-server/              # Python 模型网关、LangGraph 任务流程与检查点
-├── main.py                # 加载配置，启动 Uvicorn HTTP 服务
-├── config.py              # 模型 Base URL / Key、监听地址及独立客户端访问令牌
-├── app.py                 # FastAPI 生命周期、共享依赖组装与原始聊天网关
-├── upstream_io.py         # 有界 HTTP 响应、SSE 读取与连接中断处理
-├── model_gate.py          # 请求准入、并发及冷却状态
-├── protocol.py            # 聊天协议校验、工具消息配对、上游请求及公开响应字段
-├── rate_limit.py          # 通用 429 分类、Retry-After 解析与共享冷却策略
-├── agent_routes.py        # Agent 任务接口、SSE 快照、工具领取与结果回传
-├── agent_tasks.py         # 任务生命周期、取消、重试、删除和启动恢复
-├── agent_graph.py         # prepare/model/device 节点、摘要准备、模型重试及工具预算
-├── task_state.py          # 检查点状态字段、任务异常、预算与终态定义
-├── task_store.py          # SQLite 任务、摘要、删除标记及公开快照
-├── tool_dispatch.py       # 批次逐项派发、领取、回执去重与失败控制
-├── selection_policy.py    # 选集证据、确认条件和播放前刷新依赖
-├── agent_prompts.py       # 基础提示、客户端能力规则及每轮动态提示
-├── agent_memory.py        # 完整多轮上下文预算、真实候选引用、顺序与来源、过期裁剪
-├── agent_summary.py       # 旧对话滚动摘要、分批资料预算、结构校验与失效提示
-├── agent_model.py         # 模型流式适配、文字增量发布、工具参数片段组装
-├── agent_tools.py         # 十二项业务工具定义与参数校验
-├── chat.py                # 本地终端文字聊天客户端，不执行 Android 业务工具
-├── start.ps1              # Windows 前台运行、后台启动与停止
-├── start.sh               # Linux 用户目录启动、进程锁、状态查询与停止
-└── requirements.txt       # FastAPI、HTTPX、LangGraph 等 Python 依赖版本锁定
+agent-server/              # 一个 Python 服务进程，按职责组织为包
+├── main.py                # 兼容现有部署命令的薄启动入口
+├── chat.py                # 兼容现有终端聊天命令的薄入口
+├── start.ps1 / start.sh    # Windows / Linux 用户目录进程管理
+├── requirements.txt       # 运行依赖版本锁定
+└── maoer_agent/
+    ├── __main__.py / cli.py # 服务启动与终端客户端实现
+    ├── api/                # FastAPI 应用、任务路由、HTTP 协议
+    │   ├── app.py
+    │   ├── routes.py
+    │   └── protocol.py
+    ├── agent/              # LangGraph 编排、生命周期、上下文和选集策略
+    │   ├── graph.py / tasks.py / state.py
+    │   └── memory.py / prompts.py / summary.py / selection.py
+    ├── model/              # 模型适配、输入预算、准入和上游通信
+    │   ├── client.py / context.py / gate.py
+    │   └── rate_limit.py / transport.py / failures.py
+    ├── tools/              # 统一工具定义、手机派发和实际回执校验
+    │   └── definitions.py / dispatch.py / results.py
+    ├── research/           # RSS 与网页资料，不持有手机播放器
+    │   ├── policy.py / rss.py / sources.py / store.py
+    │   ├── tools.py        # 资料工具入口、来源映射和正文节选
+    │   └── web.py          # Tavily 通信、持久额度、冷却及用量监测
+    ├── storage/
+    │   └── tasks.py        # 任务、摘要、删除标记和公开快照
+    ├── core/
+    │   └── config.py / errors.py # 配置与固定文案读取
+    └── resources/
+        └── error_catalog.json / research_catalog.json
 ```
 
-这轮按文件和类拆分职责，仍保留一个 `composeApp` Gradle 模块和一个 Python 服务进程。任务 API、工具协议、SQLite 表、LangGraph 检查点、播放快照键与凭据加密格式保持兼容。Android 的 `AgentTools` 组装业务处理器与 `AgentToolExecutor`，后者统一维护“领取 → 保存执行标记 → 操作 → 保存结果”的顺序；会话取消补传与新建删除流程继续复用这一机制。
+当前按目录、文件和类拆分职责，仍保留一个 `composeApp` Gradle 模块和一个 Python 服务进程。任务 API、工具协议、SQLite 表、LangGraph 检查点、播放快照键与凭据加密格式保持兼容。Android 的 `AgentTools` 组装业务处理器与 `AgentToolExecutor`，后者统一维护“领取 → 保存执行标记 → 操作 → 保存结果”的顺序；会话取消补传与新建删除流程继续复用这一机制。
 
 2026-10-05 模块拆分验证：重构前后 8 组服务端隔离回归均通过，相同样本的模型输入在归一化任务 ID 后完全一致；旧版本待执行检查点可由新版本继续处理，不重复派发已完成工具。Medium Phone / API 36.1 独立测试包完成 13 项设备检查，覆盖全部 12 个工具、真实 Media3 自动/手动续听、首尾循环、定时停止、重复执行去重、取消补传和删除失败重试。现有单元测试 38 项通过、1 项外部 RSS 快照未提供而跳过。设备验证使用可控 RSS、静音音频及 HTTP 夹具，不等同于本轮已复测远端真实模型和全部外部节目源。标准业务构建通过，正式包已安装到模拟器；本轮未部署远端服务，真机未操作。首页、分类、聊天及键盘布局已核查，公共 UI 定义原样迁移，原预览图继续表达相同布局，不将旧对话截图标为本轮新增模型验收。
 
@@ -316,37 +318,39 @@ agent-server/              # Python 模型网关、LangGraph 任务流程与检�
 
 ### Python 服务端如何协作
 
-服务端分为模型网关和 Agent 任务管理两部分，共用 HTTPX 连接、并发限制与冷却状态。代码目前直接放在 `agent-server/` 下，按文件划分职责；Android 通过任务接口使用 Agent，`chat.py` 则通过原始聊天网关提供终端文字交流。
+服务端分为模型网关和 Agent 任务管理两部分，共用 HTTPX 连接、并发限制与冷却状态。业务实现位于 `agent-server/maoer_agent/`，按接口、任务、模型、工具、资料和存储职责分目录；Android 通过任务接口使用 Agent，`chat.py` 则通过原始聊天网关提供终端文字交流。
 
 | 模块 | 具体职责与边界 |
 | --- | --- |
-| `main.py` / `config.py` | 读取 `.local/agent.env` 中的 OpenAI-compatible Base URL、模型和 API Key，创建或读取独立的客户端访问令牌，再启动 Uvicorn。上游 Key 留在服务端，客户端不能覆盖模型配置。 |
-| `app.py` / `protocol.py` | 创建 FastAPI 应用，在生命周期内打开、关闭共享 HTTPX 客户端和任务服务；校验访问令牌、请求大小、消息角色及工具结果配对，提供 `/v1/chat/completions` 网关，并过滤对外响应字段。 |
-| `agent_routes.py` | 提供任务创建、查询、取消、重试及会话删除接口；通过 SSE 返回带版本号的完整任务快照，接收 Android 的工具领取和执行结果。SSE 包含逐步增长的回复文字，但不是原样转发上游 Token 事件。 |
-| `agent_tasks.py` | 协调任务创建、后台运行、取消、重试、会话删除与服务重启恢复；通过存储、图和工具派发模块完成流程，不直接执行 SQL。 |
-| `agent_graph.py` / `task_state.py` | 保持 `prepare`、`model`、`device` 三个节点及原检查点字段；负责摘要准备、模型有限重试、每任务 24 次工具预算及收尾回答，在设备节点中断等待真实回执。 |
-| `task_store.py` | 持久化任务、摘要与删除标记；统一任务查询、更新及对外快照字段过滤，继续使用原 SQLite 表和两个数据库文件。 |
-| `tool_dispatch.py` | 接收最多 8 项的批次，每次向手机派发一项；保存领取与执行回执、去重，控制失败后跳过后续控制但允许独立读取，接收取消后迟到回执。 |
-| `selection_policy.py` | 根据真实工具证据判断选集是否需要确认及是否需要先刷新；返回结构化候选与条件，确认文案仍由模型生成。 |
-| `agent_prompts.py` | 集中基础提示、客户端选集能力和模型配置、本轮状态、预算耗尽提示；与工具参数定义分离，整理不改变既有提示内容。 |
-| `agent_memory.py` | 从已结束任务提取有预算的交流，保留失败、取消轮的用户要求及已有回执，从成功工具回执构建候选引用和历史播放对象；引用参与真实 ID 校验，与任务及检查点一起持久化、删除。记忆仅在服务端组装模型输入时附加，不作为额外字段传给 Android。 |
-| `agent_summary.py` | 限制待整理资料、构造摘要提示、校验四组结构化摘要的格式与长度；将摘要标为低信任背景，提示最新要求优先、缺失时澄清，不能作为工具 ID 或实时状态证据。原始 RSS 长文和内部 ID 不写入整理资料的工具记录。 |
-| `agent_model.py` | 调用模型并解析 SSE，将文字增量发布给任务状态；组装完整的工具名称、调用 ID 和 JSON 参数，再交给任务层校验，避免执行尚未接收完整的工具请求。 |
-| `agent_tools.py` | 集中登记 12 项手机工具与 4 项服务端研究工具的参数、执行位置、能力要求和结果类型，派生工具白名单。新版客户端使用服务端 RSS 检索和网页资料工具；旧客户端继续使用原有 RSS 节选检索。 |
-| `tool_results.py` | 校验实际回执中的结果类型、目标身份与播放器观察值；原始回执、幂等指纹和资料标注分别保存。不完整或矛盾的成功回执转为不确定，防止误报操作完成。 |
-| `model_context.py` | 只整理发给模型的输入副本；按完整旧轮次移出历史，必要时缩减已消费且可补读的网页片段，保留原始执行记录、调用配对、身份、顺序和思考续传字段。 |
-| `upstream_io.py` / `model_gate.py` | 独立于 Web 入口提供有界 HTTP/SSE 读取和请求准入；模型适配器显式接收共享 HTTPX 客户端与 Gate，不再反向导入 `app.py`。 |
-| `rate_limit.py` | 解析通用 429 错误和 `Retry-After`，计算共享冷却时间；模型节点据此安排有限重试。额度错误及未知 429 不盲目重试，文件中已无智谱专用错误码逻辑。 |
+| `main.py` / `core/config.py` | 读取 `.local/agent.env` 中的 OpenAI-compatible Base URL、模型和 API Key，创建或读取独立的客户端访问令牌，再启动 Uvicorn。上游 Key 留在服务端，客户端不能覆盖模型配置。 |
+| `api/app.py` / `api/protocol.py` | 创建 FastAPI 应用，在生命周期内打开、关闭共享 HTTPX 客户端和任务服务；校验访问令牌、请求大小、消息角色及工具结果配对，提供 `/v1/chat/completions` 网关，并过滤对外响应字段。 |
+| `api/routes.py` | 提供任务创建、查询、取消、重试及会话删除接口；通过 SSE 返回带版本号的完整任务快照，接收 Android 的工具领取和执行结果。SSE 包含逐步增长的回复文字，但不是原样转发上游 Token 事件。 |
+| `agent/tasks.py` | 协调任务创建、后台运行、取消、重试、会话删除与服务重启恢复；通过存储、图和工具派发模块完成流程，不直接执行 SQL。 |
+| `agent/graph.py` / `agent/state.py` | 保持 `prepare`、`model`、`research`、`device` 四个节点及原检查点字段；负责摘要准备、模型有限重试、每任务 24 次工具预算及收尾回答，在设备节点中断等待真实回执。 |
+| `storage/tasks.py` | 持久化任务、摘要与删除标记；统一任务查询、更新及对外快照字段过滤，继续使用原 SQLite 表和两个数据库文件。 |
+| `tools/dispatch.py` | 接收最多 8 项的批次，每次向手机派发一项；保存领取与执行回执、去重，控制失败后跳过后续控制但允许独立读取，接收取消后迟到回执。 |
+| `agent/selection.py` | 根据真实工具证据判断选集是否需要确认及是否需要先刷新；返回结构化候选与条件，确认文案仍由模型生成。 |
+| `agent/prompts.py` | 集中基础提示、客户端选集能力和模型配置、本轮状态、预算耗尽提示；与工具参数定义分离，整理不改变既有提示内容。 |
+| `agent/memory.py` | 从已结束任务提取有预算的交流，保留失败、取消轮的用户要求及已有回执，从成功工具回执构建候选引用和历史播放对象；引用参与真实 ID 校验，与任务及检查点一起持久化、删除。记忆仅在服务端组装模型输入时附加，不作为额外字段传给 Android。 |
+| `agent/summary.py` | 限制待整理资料、构造摘要提示、校验四组结构化摘要的格式与长度；将摘要标为低信任背景，提示最新要求优先、缺失时澄清，不能作为工具 ID 或实时状态证据。原始 RSS 长文和内部 ID 不写入整理资料的工具记录。 |
+| `model/client.py` | 调用模型并解析 SSE，将文字增量发布给任务状态；组装完整的工具名称、调用 ID 和 JSON 参数，再交给任务层校验，避免执行尚未接收完整的工具请求。 |
+| `tools/definitions.py` | 集中登记 12 项手机工具与 4 项服务端研究工具的参数、执行位置、能力要求和结果类型，派生工具白名单。新版客户端使用服务端 RSS 检索和网页资料工具；旧客户端继续使用原有 RSS 节选检索。 |
+| `tools/results.py` | 校验实际回执中的结果类型、目标身份与播放器观察值；原始回执、幂等指纹和资料标注分别保存。不完整或矛盾的成功回执转为不确定，防止误报操作完成。 |
+| `model/context.py` | 只整理发给模型的输入副本；按完整旧轮次移出历史，必要时缩减已消费且可补读的网页片段，保留原始执行记录、调用配对、身份、顺序和思考续传字段。 |
+| `model/transport.py` / `model/gate.py` | 独立于 Web 入口提供有界 HTTP/SSE 读取和请求准入；模型适配器显式接收共享 HTTPX 客户端与 Gate，不再反向导入 `app.py`。 |
+| `model/rate_limit.py` | 解析通用 429 错误和 `Retry-After`，计算共享冷却时间；模型节点据此安排有限重试。额度错误及未知 429 不盲目重试，文件中已无智谱专用错误码逻辑。 |
+| `research/tools.py` / `research/web.py` | 工具入口负责RSS/网页分派、URL许可和结果映射；独立网页客户端负责固定成本请求、持久免费额度、防重复计费、429冷却与后台用量监测。共用原资料库，关闭时先停止用量任务，再关闭RSS与存储。 |
+| `core/` / `resources/` | 配置定位到项目根目录下的 `.local`，目录迁移不改变配置、令牌、数据库和向量模型位置。固定JSON通过Python包资源读取；Android生成错误文案使用同一份JSON。 |
 | `start.ps1` / `start.sh` | 管理当前用户目录下的启动、日志和进程；Linux 脚本复用已有 Python/Conda 环境并使用进程锁。当前脚本不提供开机自启或崩溃自动拉起。 |
 
 一次“播放岩中花述最新一期”的请求，会按下面的路径查询真实节目和分集，再控制手机播放器：
 
 ```mermaid
 flowchart TD
-    A[Android 点播助手] -->|App SSH 隧道 / HTTP| B[agent_routes：创建或恢复任务]
+    A[Android 点播助手] -->|App SSH 隧道 / HTTP| B[api/routes：创建或恢复任务]
     B --> P[prepare：近期原文与旧对话摘要]
-    P --> C[agent_graph：LangGraph model 节点]
-    C --> D[agent_model：通过共享 HTTPX 调用模型]
+    P --> C[agent/graph：LangGraph model 节点]
+    C --> D[model/client：通过共享 HTTPX 调用模型]
     D --> E{完整模型输出}
     E -->|最终文字| F[保存任务结果]
     E -->|工具调用| G[校验工具白名单、参数和来源 ID]
@@ -357,8 +361,8 @@ flowchart TD
     R -->|仅研究工具| C
     H -->|SSE 快照中的待执行工具| A
     A -->|领取工具并调用真实业务| I[Android 目录 / RSS / 播放器]
-    I -->|真实执行回执| J[agent_routes：提交结果]
-    J --> K[tool_dispatch：保存回执并恢复任务]
+    I -->|真实执行回执| J[api/routes：提交结果]
+    J --> K[tools/dispatch：保存回执并恢复任务]
     K --> C
     F -->|SSE 任务快照| A
 ```
@@ -540,6 +544,8 @@ bash agent-server/start.sh status
 # 需要停止时执行：bash agent-server/start.sh stop
 ```
 
+升级部署必须复制完整 `agent-server/maoer_agent/` 包（包含各层 `__init__.py` 和 `resources/*.json`），不能只复制一级 `*.py`。现有 `python agent-server/main.py`、`python agent-server/chat.py` 和两平台启动脚本继续可用；从任意工作目录用脚本绝对路径启动时，配置仍取项目根目录 `.local`。先等待活动任务结束并停止服务，再同步整个包及入口、清理被迁移的旧一级模块，随后启动并核对健康与实际任务；不要同时运行新旧实例。依赖、数据库表、检查点节点和协议均沿用，运行数据不随源码目录迁移。
+
 默认复用 `$HOME/miniconda3/envs/py310/bin/python`；路径不同可通过环境变量 `AGENT_PYTHON` 指定已有解释器。脚本通过 `nohup` 后台运行，日志写入 `.local/agent-server.log`，进程锁避免重复启动；未安装系统服务，不提供服务器重启后的自动启动或崩溃拉起。完整依赖和凭据需要先准备好，启动输出后还应检查 `/healthz` 与实际 Agent 请求。
 
 迁移已有会话时先停止原服务，再一致地复制 `.local/agent-tasks.sqlite3`、`.local/agent-tasks.sqlite3.checkpoints` 和 `.local/agent-server.token`；模型配置仅复制当前使用的供应商。原实例保持停止，避免新旧服务各自处理同一任务。Android 会保留已保存的地址，需要在连接设置中手动切换；未完成任务时禁止切换服务器，但允许修正同一服务器的令牌并恢复。
@@ -608,7 +614,7 @@ SSH 由 Android 平台的 [mwiede/JSch](https://github.com/mwiede/jsch) 实现�
 
 原始聊天网关使用 SSE 的 `data: [DONE]` 表示正常结束、`event: error` 表示中断。Agent SSE 则发送带版本号的完整任务快照，以任务状态判断等待工具或结束；重连不会把已收到的文本重复追加。只有完整模型输出经过工具白名单、参数和来源 ID 验证后，才交由手机执行。模型服务尚未部署到公网，没有账号、多设备协同、持久化配额或生产级运维配置。
 
-`rate_limit.py` 保留通用的 429 分类与冷却逻辑，识别 `rate_limit_exceeded`、`overloaded_error`、`server_overloaded` 等暂时性拒绝；`insufficient_quota`、`billing_hard_limit_reached` 等额度错误不自动重试。未知 429 不盲目重试。不再解释智谱数值错误码；不会转发上游错误正文。
+`model/rate_limit.py` 保留通用的 429 分类与冷却逻辑，识别 `rate_limit_exceeded`、`overloaded_error`、`server_overloaded` 等暂时性拒绝；`insufficient_quota`、`billing_hard_limit_reached` 等额度错误不自动重试。未知 429 不盲目重试。不再解释智谱数值错误码；不会转发上游错误正文。
 
 网关按连续 429 次数设置 30、60、120、300 秒冷却，并附加 0–5 秒随机等待。合法上游 `Retry-After` 是等待下限；冷却期间不访问上游，完整成功后重置。状态保存在当前服务进程中，重启会清空。保留本地单并发，默认关闭额外分钟配额，避免多步工具任务被旧的 6 次/分钟限制阻塞。可按账户实际配额配置 `AGENT_MODEL_RPM`；这不代表上游无限额，真实 429 仍按上述策略等待。
 
@@ -788,14 +794,16 @@ Android本轮42项通过、1项可选外部RSS快照跳过；14项服务端行�
 
 2026-10-15 真机联网修复验收：额度查询已与搜索解耦；16项服务端边界测试本地、远端通过。realme GT8实际聊天最终完成6次联网调用，得到20条网页来源及带序号的中文回答，资料区默认折叠。途中模型响应超时经当前步骤恢复后完成；这是当次真实验证结果，不代表外部模型或网站永久可用。
 
-![真机联网回答与默认折叠资料区（2026-10-15）](docs/screenshots/web-search-realme-2026-10-15.png)
+以下图片为2026-10-18当前APK重拍的网页正文引用与默认折叠资料区；上文2026-10-15验收结论仍为历史记录。
+
+![当前真机网页引用与折叠资料区，无系统状态栏](docs/screenshots/device-agent-code-nostatus-2026-10-18.png)
 
 2026-10-15 节目问答恢复修复：真机“介绍一下《姜思达》，说说推荐理由”在目录查询成功后曾提示助手处理失败。原因是新版资料标注在图节点工作线程访问主线程 SQLite 连接；现已将手机回执处理改回异步事件线程，并支持从已保存完整回执的失败检查点恢复，不重复派发手机操作。6组真实 LangGraph/SQLite 隔离回归在本地、远端均通过，原真机任务恢复完成（4条成功回执、1条RSS来源），后续“介绍其中的301集”也完成。本轮只更新服务端，无需重新安装APK；上方截图仍为其标注阶段，不作为本次任务截图。
 
 
 ### 2026-10-15 错误分类与统一维护
 
-面向用户的固定错误文案统一维护在 [`agent-server/error_catalog.json`](agent-server/error_catalog.json)。Python 服务端直接读取该目录；Android 普通构建自动生成 Kotlin 资源，业务代码只引用错误码，不维护第二份中文错误表。修改已有提示只编辑此 JSON；新增错误时增加稳定错误码和模板，再在对应异常边界映射该码。`{status}`、`{seconds}` 等参数必须来自可信结构化字段，不直接展示服务商响应或异常原文。生成的 `GeneratedErrorCatalog.kt` 不手工编辑；部署服务端必须连同 JSON 一起更新，手机文案更新需要重新构建并安装 APK。
+面向用户的固定错误文案统一维护在 [`agent-server/maoer_agent/resources/error_catalog.json`](agent-server/maoer_agent/resources/error_catalog.json)。Python 服务端直接读取该目录；Android 普通构建自动生成 Kotlin 资源，业务代码只引用错误码，不维护第二份中文错误表。修改已有提示只编辑此 JSON；新增错误时增加稳定错误码和模板，再在对应异常边界映射该码。`{status}`、`{seconds}` 等参数必须来自可信结构化字段，不直接展示服务商响应或异常原文。生成的 `GeneratedErrorCatalog.kt` 不手工编辑；部署服务端必须连同 JSON 一起更新，手机文案更新需要重新构建并安装 APK。
 
 模型超时区分服务器连接、发送、等待连接池、等待响应头、等待首段数据、响应中途无新数据和总时限，并说明发生于理解问题、生成计划或分析工具结果等阶段。模型网关 HTTP 504 与本地总时限分开显示。旧任务没有这些字段时明确说明未记录环节，不倒推历史原因；新增安全耗时日志不记录问题正文、推理文本、密码或令牌。
 
@@ -809,9 +817,7 @@ Android本轮42项通过、1项可选外部RSS快照跳过；14项服务端行�
 
 首次正式服务验收的后台Instrumentation被手机系统回收（退出记录为OTHER KILLS BY SYSTEM/Cached nirvana），当时远端请求实际已completed；前台保持窗口亮起后重测通过。该失败属于本次测试运行条件，不能写成模型超时或业务崩溃。测试RSS夹具曾因缺分集提前解析失败，修正夹具后20项全部通过。
 
-下图为**错误提示验收阶段在真机独立包采集的故障注入示例**，用于展示文案和布局，不是用户对话，也不表示此次真实模型发生过该超时。此前同用途模拟器图已替换，其他历史图片继续保留采集阶段标注。
-
-![模型响应中途超时的明确提示（2026-10-15，realme真机故障注入）](docs/screenshots/agent-error-timeout-realme-2026-10-15.png)
+错误提示的故障注入验收保留上述文字记录。旧真机故障示意图已从README撤下；当前真机功能示例均重新采集，不以新图冒充当时的故障现场。
 
 
 ### 2026-10-15 浏览状态与本集结束定时修复
@@ -875,20 +881,68 @@ RSS 全文字面计数和组合筛选现在生成独立的统计资料编号，�
 
 ## 2026-10-18 点播助手与阅读体验修复
 
-下图均为当前安装版本的 RMX6699 / Android 16 真机截图。保留杂志风首页与大封面播放器；点播助手长回复按首段定位，按钮文案为“跳转至回答开头”。查询中显示实际处理阶段与返回结果数，超过输入上限时保留草稿并提示。资料区先展示操作入口，再显示可展开的短预览；RSS说明保留段落，HTTP/HTTPS链接有独立可点击入口，完整前缀与长链接换行均保留。
+下列功能示意已按新截图规定，用2026-10-18当前APK重新采集且不含系统状态栏。上一轮验收事实和APK哈希仍按文字保留，新图不作为过去阶段的取证照片。保留杂志风首页与大封面播放器；点播助手长回复按首段定位，按钮文案为“跳转至回答开头”。查询中显示实际处理阶段与返回结果数，超过输入上限时保留草稿并提示。资料区先展示操作入口，再显示可展开的短预览；RSS说明保留段落，HTTP/HTTPS链接有独立可点击入口，完整前缀与长链接换行均保留。
 
 | 当前首页 | 助手长答与返回开头 |
 | --- | --- |
-| <img src="docs/screenshots/fix-home-realme-2026-10-18.png" alt="2026-10-18当前真机首页，杂志风精选与底部播放条及双页导航" width="320"> | <img src="docs/screenshots/fix-agent-answer-realme-2026-10-18.png" alt="2026-10-18当前助手长回答首段可读，跳转至回答开头按钮完整显示" width="320"> |
+| <img src="docs/screenshots/device-home-nostatus-2026-10-18.png" alt="当前真机首页，精选与底部播放导航，无系统状态栏" width="320"> | <img src="docs/screenshots/device-agent-answer-nostatus-2026-10-18.png" alt="当前长回答首段，位于开头时隐藏跳转按钮，无系统状态栏" width="320"> |
 
 | 输入超限保留草稿 | RSS段落与列表 |
 | --- | --- |
-| <img src="docs/screenshots/fix-agent-input-realme-2026-10-18.png" alt="当前真机超2000字符时提示本次未替换草稿，草稿保留检查仍在输入框" width="320"> | <img src="docs/screenshots/fix-rss-paragraphs-realme-2026-10-18.png" alt="当前播放器说明按制作人、嘉宾和节目介绍分段，系统状态栏不与正文叠字" width="320"> |
+| <img src="docs/screenshots/device-agent-input-nostatus-2026-10-18.png" alt="当前真机一次输入2001字后显示提示，保留草稿四字仍在输入框，无系统状态栏" width="320"> | <img src="docs/screenshots/device-rss-paragraphs-nostatus-2026-10-18.png" alt="当前播放器说明按制作人、嘉宾和节目介绍分段，无系统状态栏，正文段落完整" width="320"> |
 
 | RSS链接显示与点击 |
 | --- |
-| <img src="docs/screenshots/fix-rss-links-realme-2026-10-18.png" alt="当前播放器的https链接首字母h完整显示，长链接完整换行；GIADA官网普通点击已实测打开系统确认与浏览器" width="320"> |
+| <img src="docs/screenshots/device-rss-links-nostatus-2026-10-18.png" alt="当前播放器https首字母h与长链接完整，无系统状态栏；此前GIADA普通点击验收结论保留" width="320"> |
 
 混合资料问答中的明确播放控制可独立处理；未核实的节目身份先通过真实检索纠正，仍保留选集确认、调用预算及不重放控制。推荐需要分别满足时长与内容偏好；本轮没有在已检查候选中找到“轻松且20分钟内”的两期时，如实说明已查范围与未满足的条件，不把新闻资讯充作完全匹配。
 
-当前APK为1.1.0-dev（versionCode 2，沿用现有debug签名），SHA256：`3190d7d9c8a9d95391b1484f6a47c16230c1e9540f3dbd3e39e2b293e5809536`。Android回归47通过、1项缺外部RSS快照输入跳过；服务端12项边界回归通过，14项真实模型定向与11轮真机消息分别核对。真实模型检查包含受控证据/错误计划，不能等同14轮完整手机来源查询；真机任务完成也不代表每一条自然语言推断始终正确。修复中发现的失败与用户反馈已保留记录，不作为全项目无BUG保证；下载仍按来源条件限制。
+该阶段APK为1.1.0-dev（versionCode 2，沿用现有debug签名），SHA256：`3190d7d9c8a9d95391b1484f6a47c16230c1e9540f3dbd3e39e2b293e5809536`。Android回归47通过、1项缺外部RSS快照输入跳过；服务端12项边界回归通过，14项真实模型定向与11轮真机消息分别核对。真实模型检查包含受控证据/错误计划，不能等同14轮完整手机来源查询；真机任务完成也不代表每一条自然语言推断始终正确。修复中发现的失败与用户反馈已保留记录，不作为全项目无BUG保证；下载仍按来源条件限制。
+
+
+<a id="current-preview"></a>
+
+### 2026-10-18 服务端目录整理与助手提示校正
+
+服务端一级目录收敛为两个启动入口、两平台脚本和依赖文件，业务代码位于 `maoer_agent/`，按 `api`、`agent`、`model`、`tools`、`research`、`storage`、`core`、`resources` 分目录。网页服务的通信、限额、冷却和后台用量监测从资料工具入口拆到 `research/web.py`，采用组合共享原资料库。完整目录及职责见前文；启动命令、原会话库、检查点及 `.local` 配置位置沿用，升级时须同步整个包及JSON资源。
+
+“跳转至回答开头”按阅读位置显示：只有已完成的长回答正文超过可视区，并且向下滚过开头64dp时才出现；短回答、生成中、已经在开头时隐藏，跳回后自动隐藏。来源卡片高度不用于判断回答长度。
+
+等待提示区分实际阶段：理解要求、思考如何回答、生成回复，以及已进入的RSS/网页读取、具体手机工具动作。纯文字回答不会再笼统显示“正在安排查询与操作”；已返回结果数表示收到回执，不表示全部操作成功。另修复Markdown行内代码将XML标签吞掉的问题，代码内容以字面文本显示，引用和表格继续使用原渲染。
+
+以下九张均为真机当前安装的截图阶段APK（SHA256前缀78915283）在RMX6699 / Android 16上的重新采集图，不包含系统状态栏。原屏幕1440×3136，按Android状态栏实际边界排除顶部160像素，输出1440×2976；保留真实应用内容和底部手势区，没有重绘界面。
+
+| 当前首页 | 长回答开头：入口隐藏 |
+| --- | --- |
+| <img src="docs/screenshots/device-home-nostatus-2026-10-18.png" alt="当前安装版本的杂志风首页和独立底部播放导航" width="320"> | <img src="docs/screenshots/device-agent-answer-nostatus-2026-10-18.png" alt="真机截图阶段APK长回答自动停在首句，正在阅读开头时隐藏跳转入口" width="320"> |
+
+| 向下阅读：按需出现跳转入口 | 等待回复：实际理解阶段 |
+| --- | --- |
+| <img src="docs/screenshots/device-agent-scrolled-nostatus-2026-10-18.png" alt="完成的长回答滚过开头后显示跳转至回答开头，点击后返回并隐藏" width="320"> | <img src="docs/screenshots/device-agent-wait-nostatus-2026-10-18.png" alt="纯文字请求等待显示正在理解你的要求，未提前声称查询或操作，无系统状态栏" width="320"> |
+
+| 行内代码与短回答 |
+| --- |
+| <img src="docs/screenshots/device-agent-code-nostatus-2026-10-18.png" alt="同一条真实网页答复中rss和channel两个XML标签完整显示，短回答无跳转入口" width="320"> |
+
+| 两列表格排版 | 输入超限保留草稿 |
+| --- | --- |
+| <img src="docs/screenshots/device-agent-table-nostatus-2026-10-18.png" alt="当前真机两列表格排版，完整标题和表格边界，无系统状态栏" width="320"> | <img src="docs/screenshots/device-agent-input-nostatus-2026-10-18.png" alt="一次输入2001字后提示上限，保留草稿仍在输入框，无系统状态栏" width="320"> |
+
+| RSS分段说明 | 完整URL前缀与换行 |
+| --- | --- |
+| <img src="docs/screenshots/device-rss-paragraphs-nostatus-2026-10-18.png" alt="制作人嘉宾和说明分段，无系统状态栏" width="320"> | <img src="docs/screenshots/device-rss-links-nostatus-2026-10-18.png" alt="官网和长URL前缀及末尾完整，无系统状态栏" width="320"> |
+
+本轮旧版24项、新版28项服务端对照在本地和正式环境分别通过；包含真实LangGraph/SQLite旧检查点续跑、顺序派发、回执去重、网页预算与HTTP/SSE，归一样本的模型输入和结果一致。Android共50项：49通过、1项可选外部RSS快照缺输入跳过。另用正式服务和真机验证纯文字流式、只读播放状态/分集说明、真实网页读取及阅读定位；测试消息保留在当前聊天。网页读取为正文节选，未冒充读完全文。上述结论限于执行样本，不关闭已有推荐质量等历史未完成事项。
+
+真机截图阶段APK为1.1.0-dev / versionCode 2，SHA256：`789152831bf5e14b6887945725a258bb6bafbb0b271896fcf6d1915aa403a069`。提交前模拟器复验追加的代码编号保护见下文，新APK哈希单独记录；九张真机图保留实际拍摄版本与来源。本轮服务端完整包已同步正式服务器，原任务及配置在部署前后核对保持；后续验证新消息正常追加。维护记录与既有本地回归测试继续本地排除，一次性验证脚本和测试库在证据摘要落入已有记录后清理。
+
+
+### 提交前模拟器复验（2026-10-18）
+
+在 Medium_Phone_API_36.1 模拟器（1080×2400）上使用普通业务构建覆盖安装，复核长答流式与完成定位、主动滚动后位置保持、按需跳转及返回隐藏、长答后短答、1.3倍字体，以及最近30轮窗口淘汰后新回复的独立测量。短正文即使展开长资料并向下阅读，也不显示返回长答开头入口。首页和分类的中文、全拼及首字母搜索均经过实际界面验证；2001字输入会保留原草稿并提示上限，清空及中文再次输入正常。
+
+复验发现并补修一处代码引用边界：回答含资料编号时，提前替换全文编号会改动代码中的字面量 `[1]`。现按Markdown节点保护行内/围栏/缩进代码及已有链接、图片等区域，正文引用仍能打开对应资料，表格代码与引用也分别保留。没有更改已保存回复的原文。
+
+Android单元回归共51项：50通过、1项缺可选外部RSS快照输入跳过、0失败；普通业务构建不依赖本地测试配置。模拟器流式/工具回归使用隔离的受控上游，经实际HTTP/SSE、任务存储、LangGraph和客户端执行；同步核对网页搜索、网页阅读阶段分别显示对应等待文案；播放状态来自真实模拟器只读回执，网页资料为受控内容，不能等同真实模型或公开来源质量验收。既有正式服务与真机验证结论保留在上一段。
+
+本次模拟器验收APK为1.1.0-dev / versionCode 2，SHA256：`2c6b624cfb4f2c2a8e17a9955ffd02fccb9909e09f62f62d135817a4602a5a8e`。上方九张无状态栏真机图仍对应真机实际安装的78915283阶段；本次追加修复在模拟器验证，未将旧真机图宣称为新APK重拍。README32张不同图片及全体本地文档133处图片链接已核对，模拟器测试样例不加入当前功能预览。

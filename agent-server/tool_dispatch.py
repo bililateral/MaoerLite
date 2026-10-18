@@ -3,6 +3,7 @@ import hashlib
 import json
 from langgraph.types import Command
 from task_state import TaskConflict, READ_ONLY
+from tool_results import checked_result
 
 
 class ToolDispatcher:
@@ -64,14 +65,19 @@ class ToolDispatcher:
             if key not in run['claimed'] or key not in {c['id'] for c in run.get('batch', [])}:
                 raise TaskConflict('tool_not_pending')
             run['receipts'][key] = fingerprint
-            run['results'].extend(results)
+            call = next(c for c in run['batch'] if c['id'] == key)
+            run.setdefault('raw_results', {})[key] = results[0]['result']
+            run['results'].append({'call_id': key, 'result': checked_result(call, results[0]['result'])})
             return self.store.put(run)
         if run['status'] != 'awaiting_tools' or run_id in self.jobs: raise TaskConflict('tool_not_pending')
         if [r['call_id'] for r in results] != [c['id'] for c in run['calls']]: raise TaskConflict('tool_id_mismatch')
         if any(r['call_id'] not in run['claimed'] for r in results): raise TaskConflict('tool_not_claimed')
         run['receipts'][key] = fingerprint
-        run['results'].extend(results)
-        if run['calls'][0]['name'] not in READ_ONLY and results[0]['result'].get('status') != 'ok':
+        raw = results[0]['result']
+        run.setdefault('raw_results', {})[key] = raw
+        checked = checked_result(run['calls'][0], raw)
+        run['results'].append({'call_id': key, 'result': checked})
+        if run['calls'][0]['name'] not in READ_ONLY and checked.get('status') != 'ok':
             run['control_blocked'] = True
         self.store.put(run)
         completed = self.advance_batch(run_id, run.get('batch', run['calls']))

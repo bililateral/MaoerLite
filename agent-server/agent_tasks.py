@@ -13,6 +13,7 @@ from agent_model import ModelFailure, generate
 from agent_prompts import SYSTEM, selection_policy
 from agent_memory import context, last_turn
 from agent_graph import AgentGraph
+from tool_results import outcome_facts
 from task_store import Store
 from task_state import State, TaskConflict, TERMINAL, MAX_TOOL_CALLS, MAX_MODEL_ROUNDS, READ_ONLY
 from tool_dispatch import ToolDispatcher
@@ -48,7 +49,7 @@ class AgentTasks:
             # Keep conversation data local even if the shell has tracing env vars.
             while True:
                 with tracing_context(enabled=False):
-                    result = await self.graph.ainvoke(value, {'configurable': {'thread_id': run_id}, 'recursion_limit': 64})
+                    result = await self.graph.ainvoke(value, {'configurable': {'thread_id': run_id}, 'recursion_limit': 96}, durability='sync')
                 if result.get('__interrupt__'):
                     results = self.advance_batch(run_id, result['calls'])
                     if results is None:
@@ -56,7 +57,7 @@ class AgentTasks:
                     value = Command(resume=results)
                 else:
                     self.store.update(run_id, status='completed', calls=[], text=result['messages'][-1].get('content') or '',
-                                      history=last_turn(result['messages']), memory=result.get('memory', {}), error='', error_detail={}, phase='', retry_after=0)
+                                      history=last_turn(result['messages']), outcome=outcome_facts(last_turn(result['messages'])), memory=result.get('memory', {}), error='', error_detail={}, phase='', retry_after=0)
                     break
         except asyncio.CancelledError:
             # Explicit cancellation and service shutdown choose their status outside this task.
@@ -124,7 +125,7 @@ class AgentTasks:
     async def retry(self, run_id):
         run = self.get_run(run_id)
         if run['status'] != 'failed' or run_id in self.jobs: raise TaskConflict('task_not_retryable')
-        if run['error'] == 'tool_round_limit': raise TaskConflict('task_not_retryable')
+        if run['error'] in ('tool_round_limit', 'model_attempt_budget_exhausted', 'context_budget_exhausted'): raise TaskConflict('task_not_retryable')
         with tracing_context(enabled=False):
             snapshot = await self.graph.aget_state({'configurable': {'thread_id': run_id}})
         # Deletion may begin while the checkpointer read is awaited.
@@ -176,7 +177,7 @@ class AgentTasks:
                 # The final checkpoint can commit before the public snapshot.
                 # Recover its answer without another model call or device effect.
                 self.store.update(run['id'], status='completed', calls=[],
-                                  text=messages[-1].get('content') or '', history=last_turn(messages),
+                                  text=messages[-1].get('content') or '', history=last_turn(messages), outcome=outcome_facts(last_turn(messages)),
                                   memory=snapshot.values.get('memory', run.get('memory', {})), error='', retry_after=0)
             elif snapshot.tasks and any(task.interrupts for task in snapshot.tasks):
                 calls = snapshot.values.get('calls', [])

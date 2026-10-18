@@ -25,6 +25,7 @@ class Settings:
     model_requests_per_minute: int = 0
     tavily_key: str = field(default='', repr=False)
     web_monthly_limit: int = 950
+    context_budget_bytes: int = 240000
 
     @property
     def endpoint(self):
@@ -61,6 +62,9 @@ def load_settings(path: Path = ROOT / '.local/agent.env') -> Settings:
         raise ValueError('Invalid model service base URL')
     if not model or len(model) > 128 or not model.isascii() or any(c.isspace() for c in model):
         raise ValueError('Invalid model name')
+    budget = int(values.get('AGENT_CONTEXT_BUDGET_BYTES', '240000'))
+    if not 64000 <= budget <= 4000000:
+        raise ValueError('Invalid AGENT_CONTEXT_BUDGET_BYTES')
     port = int(values.get('AGENT_PORT', '8787'))
     model_rpm = int(values.get('AGENT_MODEL_RPM', '0'))
     if not 0 <= model_rpm <= 10000:
@@ -84,5 +88,5 @@ def load_settings(path: Path = ROOT / '.local/agent.env') -> Settings:
         raise ValueError('Invalid local access token file')
     return Settings(api_key=key, access_token=token, port=port, base_url=base_url, model=model, host=host,
                     agent_thinking=thinking == 'enabled', reasoning_effort=effort,
-                    model_requests_per_minute=model_rpm, tavily_key=values.get('TAVILY_API_KEY', ''),
+                    context_budget_bytes=budget, model_requests_per_minute=model_rpm, tavily_key=values.get('TAVILY_API_KEY', ''),
                     web_monthly_limit=min(950, max(0, int(values.get('WEB_MONTHLY_LIMIT', '950')))))

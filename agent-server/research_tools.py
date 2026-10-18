@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 from research_store import ResearchStore, digest
 from research_rss import RssResearch
 
-SERVER_TOOLS = {'web_search', 'read_web_page', 'search_rss', 'read_episode_description'}
+from agent_tools import SERVER_TOOLS
 
 
 def public_url(value):

@@ -70,4 +70,4 @@ class Store:
 
     @staticmethod
     def public(run):
-        return {k: v for k, v in run.items() if k not in ('history', 'receipts', 'input', 'memory', 'batch', 'tool_ledger', 'summary_error')}
+        return {k: v for k, v in run.items() if k not in ('history', 'receipts', 'input', 'memory', 'batch', 'tool_ledger', 'summary_error', 'raw_results', 'result_warnings', 'research_started', 'model_attempts', 'context_budget', 'outcome')}

@@ -4,7 +4,7 @@ from typing import TypedDict
 TERMINAL = {'completed', 'cancelled', 'failed'}
 MAX_TOOL_CALLS = 24
 MAX_MODEL_ROUNDS = MAX_TOOL_CALLS + 1
-READ_ONLY = {'search_catalog', 'list_episodes', 'get_playback_state', 'get_podcast_details', 'search_podcast_content'}
+from agent_tools import READ_ONLY
 
 
 class State(TypedDict):
@@ -22,6 +22,7 @@ class State(TypedDict):
     deferred_results: list[dict]
     research: bool
     route: dict
+    research_plan: list[dict]
 
 
 

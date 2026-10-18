@@ -22,6 +22,10 @@ def current_citation_view(messages):
             numbers = set()
         elif message['role'] == 'tool':
             result = json.loads(message['content'])
+            if isinstance(result.get('statistics'), dict):
+                number = result['statistics'].pop('citation', None)
+                if type(number) is int:
+                    numbers.add(str(number))
             for item in result.get('items') or []:
                 number = item.pop('citation', None)
                 if type(number) is int:
@@ -60,17 +64,39 @@ def annotate(run, result):
             if old:
                 item['citation'] = old['number']
         items.append(item)
-    return {**result, 'items': items} if 'items' in result else result, sources
+    result = {**result, 'items': items} if 'items' in result else dict(result)
+    statistics = result.get('statistics')
+    if isinstance(statistics, dict) and statistics.get('kind') == 'rss_statistics' and statistics.get('evidence'):
+        # A computed whole-query result has its own identity. Never borrow the
+        # citation of an episode merely because that episode was returned too.
+        key = hashlib.sha256(('rss_statistics|' + statistics['id']).encode()).hexdigest()[:24]
+        source = next((s for s in sources if s['key'] == key), None)
+        if source is None and len(sources) < 48:
+            source = {**statistics, 'key': key, 'number': len(sources) + 1}
+            sources.append(source)
+        if source:
+            result['statistics'] = {**statistics, 'citation': source['number']}
+    return result, sources
 
 
 def citation_context(sources):
     if not sources:
         return '本轮没有取得可引用资料，不编造[数字]引用；旧回复的编号不可沿用。'
-    rows = [f"[{s['number']}] {s.get('title', '')[:150]}：{s.get('evidence', '')[:80]}" for s in sources]
+    rows = [f"[{s['number']}] {s.get('title', '')[:150]}（{s.get('evidence_field', '来源资料')}）：{s.get('evidence', '')[:80]}" for s in sources]
     return ('以下是本轮已取得的资料编号。仅在确实支持对应结论的句末使用[数字]，不要自行编号、不要附加重复来源列表。'
+            '只能写纯[数字]，不能写[12 检索回执]、[来源12]等自创标记。全量字面计数与筛选结论引用statistics.citation对应的统计资料，'
+            '不能引用某条分集来证明全目录统计；没有分配编号的工具回执不用引用标记。'
             '推测与一般知识不冒充资料结论。网页搜索摘要不等于已读正文；新鲜度、片段与全文范围如实说明。\n' + '\n'.join(rows))
 
 
 def valid_citations(text, sources):
+    # Code, Markdown links/images and escaped brackets are ordinary content,
+    # not citation syntax. In particular, do not treat arrays as bad citations.
+    text = re.sub(r'```[\s\S]*?```|~~~[\s\S]*?~~~|(`+)[^`\n]*?\1', '', text or '')
+    text = re.sub(r'!?\[[^\]\n]*\]\([^\n]*?\)|\\\[', '', text)
+    labels = r'回执|检索结果|统计|资料|来源|引用|参考文献|\b(?:sources?|citations?|refs?|references?)\b'
+    for bracket in re.findall(r'(?<!!)\[([^\]\n]+)\]', text):
+        if re.search(r'\d', bracket) and re.search(labels, bracket, re.IGNORECASE):
+            return False  # Regenerate against real sources; never relink it blindly.
     allowed = {str(s['number']) for s in sources}
-    return all(n in allowed for n in re.findall(r'(?<!\!)\[(\d{1,3})\](?!\()', text or ''))
+    return all(n in allowed for n in re.findall(r'(?<!\!)\[(\d+)\](?!\()', text))

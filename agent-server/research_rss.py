@@ -195,7 +195,7 @@ class RssResearch:
             item['description_checks'] = checks[row['id']]
             items.append(item)
             if len(items) == 6: break
-        return {'status': 'ok', 'items': items, 'failures': failures, 'coverage_available': sum(bool(r) for _, r in feeds),
+        result = {'status': 'ok', 'items': items, 'failures': failures, 'coverage_available': sum(bool(r) for _, r in feeds),
                 'retrieval_scope': 'ranked_relevant_passages_not_exhaustive_findings',
                 'description_count': len(rows), 'matched_episodes': matched_episodes,
                 'returned': len(items), 'omitted': matched_episodes - len(items),
@@ -209,6 +209,22 @@ class RssResearch:
                 'coverage_total': len(sources), 'semantic_indexed_passages': len(vectors) if vector is not None else 0,
                 'total_passages': len(entries), 'audio_analyzed': False,
                 'note': f'RSS可用源 {sum(bool(r) for _, r in feeds)}/{len(sources)}；相关候选 {matched_episodes} 条，返回 {len(items)} 条。索引覆盖只说明检索可用性，不是全文审阅。字面筛选仅证明指定词在已存说明中的包含/排除，不证明音频或同义表述；未经全文检查不将片段未见写成全文没有。'}
+        if required_terms or excluded_terms:
+            label = sources[0]['title'] if len(sources) == 1 else '所查询节目'
+            lines = [f'{label}：已存RSS说明字面检查',
+                     f'可用节目源：{result["coverage_available"]}/{len(sources)}；检查说明：{len(rows)}条；其中截断说明：{result["literal_filter"]["incomplete_descriptions"]}条。',
+                     '包含条件（全部满足）：' + json.dumps(required_terms, ensure_ascii=False),
+                     '排除条件（任一命中即排除）：' + json.dumps(excluded_terms, ensure_ascii=False)]
+            lines += [f'精确词{json.dumps(c["literal_term"], ensure_ascii=False)}：{c["descriptions_containing"]}条说明包含。' for c in literal_counts]
+            lines += [f'符合组合字面条件：{result["literal_filter"]["eligible_descriptions"]}条；相关性检索命中：{matched_episodes}条；实际展示：{len(items)}条。',
+                      '这是程序对本次已存RSS说明的统计，不是某一分集原文；截断部分及不可用来源未检查。只证明上述精确词，不证明同义表述、商业性质或音频内容。']
+            evidence = '\n'.join(lines)
+            snapshot = json.dumps({'evidence': evidence, 'feeds': [(s['id'], f[0]) for s, f in zip(sources, feeds)]}, ensure_ascii=False)
+            result['statistics'] = {'kind': 'rss_statistics', 'id': digest(snapshot),
+                'title': label + ' · RSS说明字面统计', 'evidence': evidence,
+                'evidence_field': '程序统计（非分集原文）', 'evidence_truncated': False,
+                'source_url': '', 'freshness': 'computed'}
+        return result
 
     def evidence(self, row, excerpt, start, fetched):
         return {k: v for k, v in row.items() if k != 'description'} | {

@@ -32,7 +32,7 @@ class Result(BaseModel):
     sleep_remaining_ms: int | None = Field(default=None, ge=0)
     sleep_end_of_episode: bool | None = None
     has_more: bool | None = None
-    next_offset: int | None = Field(default=None, ge=0)
+    next_offset: int | None = Field(default=None, ge=-1)
 
 
 def checked_result(call, raw):
@@ -40,6 +40,10 @@ def checked_result(call, raw):
     try:
         parsed = Result.model_validate(raw)
         spec = TOOLS[call['name']]
+        # Android list_episodes has always used -1 for the final page. This
+        # sentinel is not a valid offset for a continuation or a text reader.
+        if parsed.next_offset == -1 and not (call['name'] == 'list_episodes' and parsed.has_more is False):
+            raise ValueError('invalid_end_offset')
         if parsed.status == 'ok':
             if spec.result_kind == 'playback':
                 if parsed.playing is None:
@@ -76,7 +80,7 @@ def checked_result(call, raw):
                             raise ValueError('wrong_podcast')
                     if call['name'] == 'read_episode_description' and item.id != call['arguments']['episode_id']:
                         raise ValueError('wrong_episode')
-                if parsed.has_more is True and call['name'] in ('read_web_page', 'read_episode_description'):
+                if parsed.has_more is True and call['name'] in ('list_episodes', 'read_web_page', 'read_episode_description'):
                     if parsed.next_offset is None or parsed.next_offset <= call['arguments'].get('offset', 0):
                         raise ValueError('invalid_page')
         # Don't inject defaults or coerce legacy values. Raw JSON stays immutable.

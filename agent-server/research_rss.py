@@ -134,7 +134,8 @@ class RssResearch:
                     pass  # Query response reports actual vector coverage.
             await asyncio.sleep(3600)
 
-    async def search(self, query, podcast_id=''):
+    async def search(self, query, podcast_id='', required_terms=None, excluded_terms=None):
+        required_terms, excluded_terms = required_terms or [], excluded_terms or []
         sources = [s for s in CATALOG if not podcast_id or s['id'] == podcast_id]
         if not sources: return {'status': 'error', 'code': 'rss_podcast_missing', 'note': error_message('rss_podcast_missing')}
         failures = {}
@@ -143,6 +144,25 @@ class RssResearch:
             return {'status': 'error', 'code': 'rss_all_unavailable', 'note': error_message('rss_all_unavailable'),
                     'failures': failures, 'coverage_available': 0, 'coverage_total': len(sources), 'items': []}
         rows = [r for _, group in feeds for r in group]
+        # Literal predicates are evaluated over stored descriptions, never over
+        # ranked passages. A truncated document cannot prove an exclusion.
+        def literal_check(row):
+            body = row['description'].casefold()
+            present = [term for term in required_terms if term.casefold() in body]
+            excluded = [term for term in excluded_terms if term.casefold() in body]
+            complete = not row['description_truncated']
+            return {'scope': 'stored_episode_description_literal_only', 'description_complete': complete,
+                    'required_terms_found': present, 'excluded_terms_found': excluded,
+                    'required_terms': required_terms, 'excluded_terms': excluded_terms,
+                    'passes': len(present) == len(required_terms) and not excluded and (not excluded_terms or complete),
+                    'audio_checked': False, 'synonyms_checked': False}
+        checks = {row['id']: literal_check(row) for row in rows}
+        literal_counts = [
+            {'literal_term': term,
+             'descriptions_containing': sum(term.casefold() in r['description'].casefold() for r in rows),
+             'descriptions_complete': sum(not r['description_truncated'] for r in rows)}
+            for term in dict.fromkeys(required_terms + excluded_terms)
+        ]
         entries = list(self.entries(rows))
         vectors = self.store.vectors([e[0] for e in entries])
         vector = None
@@ -155,6 +175,7 @@ class RssResearch:
         scored = []
         if vector is not None: import numpy as np
         for key, row, start, text, _ in entries:
+            if not checks[row['id']]['passes']: continue
             haystack = (row['title'] + ' ' + text).lower()
             lexical = sum(t in haystack for t in terms) / max(1, len(terms))
             semantic = float(np.dot(np.frombuffer(vectors[key], dtype='float32'), vector)) if vector is not None and key in vectors else 0
@@ -163,15 +184,31 @@ class RssResearch:
         scored.sort(key=lambda e: e[0], reverse=True)
         items, selected = [], set()
         timestamps = {row['id']: fetched for fetched, group in feeds for row in group}
+        matched_episodes = len({row['id'] for _, row, _, _ in scored})
         for score, row, start, text in scored:
             if row['id'] in selected: continue
             selected.add(row['id'])
-            items.append(self.evidence(row, text, start, timestamps.get(row['id'], 0)))
+            # Short descriptions can be read completely within the result budget.
+            if len(row['description']) <= 1000:
+                start, text = 0, row['description']
+            item = self.evidence(row, text, start, timestamps.get(row['id'], 0))
+            item['description_checks'] = checks[row['id']]
+            items.append(item)
             if len(items) == 6: break
         return {'status': 'ok', 'items': items, 'failures': failures, 'coverage_available': sum(bool(r) for _, r in feeds),
+                'retrieval_scope': 'ranked_relevant_passages_not_exhaustive_findings',
+                'description_count': len(rows), 'matched_episodes': matched_episodes,
+                'returned': len(items), 'omitted': matched_episodes - len(items),
+                'literal_filter': {'required_terms': required_terms, 'excluded_terms': excluded_terms,
+                    'operator': 'all_required_and_none_excluded', 'term_counts': literal_counts,
+                    'evaluated_descriptions': len(rows), 'eligible_descriptions': sum(c['passes'] for c in checks.values()),
+                    'incomplete_descriptions': sum(r['description_truncated'] for r in rows),
+                    'scope': 'stored_RSS_descriptions_only_not_audio_or_synonyms',
+                    'conclusion_scope': '只证明term_counts中每个精确字面词的出现次数和组合筛选结果；其他词、同义声明、商业性质未检查。没有检查词时没有全文字面核验结论。'},
+                'negative_claim_supported': False,
                 'coverage_total': len(sources), 'semantic_indexed_passages': len(vectors) if vector is not None else 0,
                 'total_passages': len(entries), 'audio_analyzed': False,
-                'note': f'RSS可用源 {sum(bool(r) for _, r in feeds)}/{len(sources)}；语义索引覆盖 {len(vectors) if vector is not None else 0}/{len(entries)} 个片段。其余仅按关键词检索。只返回相关片段，不代表音频全文或全部结果。'}
+                'note': f'RSS可用源 {sum(bool(r) for _, r in feeds)}/{len(sources)}；相关候选 {matched_episodes} 条，返回 {len(items)} 条。索引覆盖只说明检索可用性，不是全文审阅。字面筛选仅证明指定词在已存说明中的包含/排除，不证明音频或同义表述；未经全文检查不将片段未见写成全文没有。'}
 
     def evidence(self, row, excerpt, start, fetched):
         return {k: v for k, v in row.items() if k != 'description'} | {

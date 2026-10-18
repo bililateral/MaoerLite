@@ -1,7 +1,36 @@
 """Stable, per-answer citations. Only actual tool evidence becomes a source."""
 import hashlib
+import json
 import re
+from copy import deepcopy
 from datetime import datetime, timezone, timedelta
+
+
+def current_citation_view(messages):
+    """Old evidence remains usable; its answer-local citation IDs do not.
+
+    Change only the model input copy, not stored replies, receipts, tool-call
+    identities or provider reasoning. Current-turn annotations stay intact.
+    """
+    view = deepcopy(messages)
+    starts = [i for i, message in enumerate(view) if message['role'] == 'user']
+    if len(starts) < 2:
+        return view
+    numbers = set()
+    for message in view[:starts[-1]]:
+        if message['role'] == 'user':
+            numbers = set()
+        elif message['role'] == 'tool':
+            result = json.loads(message['content'])
+            for item in result.get('items') or []:
+                number = item.pop('citation', None)
+                if type(number) is int:
+                    numbers.add(str(number))
+            message['content'] = json.dumps(result, ensure_ascii=False)
+        elif message['role'] == 'assistant' and message.get('content'):
+            message['content'] = re.sub(r'(?<!\!)\[(\d{1,3})\](?!\()',
+                lambda match: '（此前资料）' if match[1] in numbers else match[0], message['content'])
+    return view
 
 
 def annotate(run, result):

@@ -132,7 +132,14 @@ class ToolSpec:
 
 TOOLS = {
     'list_recent_updates': ToolSpec(RecentUpdates, '按RSS发布日期跨节目查询最近发布，非语义检索。mode=podcasts每档取最新一期再排序，episodes合并分集排序，每页8项。days=0返回最近发布不限定天数；按pubDate排序。空podcast_ids为全内置目录，收藏范围先query_library取真实节目ID。返回查询覆盖、刷新状态、日期异常及时间范围。', 'server', 'podcast', 'episode', capability='research_v3', retention='document'),
-    'query_library': ToolSpec(LibraryQuery, '只读查询手机资料库：continue继续收听、favorites收藏、history历史、downloads下载。收藏含节目与分集，可favorite_kind筛选；每页最多8项，query支持节目中文/拼音及分集标题。用于回答上次听到哪里、收藏了什么、听过哪期或已下载什么，返回真实节目/分集身份、进度、已听完或下载状态。', 'device', 'library', 'library', capability='library_read_v1'),
+    'query_library': ToolSpec(LibraryQuery,
+        '只读查询手机资料库：continue继续收听、favorites收藏、history历史、downloads下载。收藏含节目与分集，可favorite_kind筛选；每页最多8项，query支持节目中文/拼音及分集标题。用于回答上次听到哪里、收藏了什么、听过哪期或已下载什么。'
+        'items有三种完整条目结构：'
+        '①收藏节目：kind=podcast、id（节目ID）、title、category。'
+        '②收听分集（continue/history/favorites）：kind=episode、id（分集ID）、title、podcast_id、podcast_title、position_ms（收听位置）、duration_ms（总时长）、last_played_at、completed、favorite。'
+        '③下载分集（downloads）：kind=episode、id（分集ID）、title、podcast_id、podcast_title、download_status、bytes、total_bytes、offline_available。'
+        '分页信息为total、returned、offset、has_more、next_offset。',
+        'device', 'library', 'library', capability='library_read_v1'),
     'web_search': ToolSpec(WebSearch, '搜索公开互联网以核实最新外部信息。使用免费搜索额度。返回摘要及真实网址；关键事实应继续read_web_page读取原文。不是播客检索。', 'server', 'web', 'web', changes_state=False, capability='research_v3', retry='reserved_credit', retention='document'),
     'read_web_page': ToolSpec(WebRead, '读取本轮搜索结果或用户提供的公开网页正文。query可定位文中词，offset按字符分页；只有实际返回原文能作为引用依据。', 'server', 'web', 'web', changes_state=False, capability='research_v3', retry='reserved_credit', retention='document'),
     'search_rss': ToolSpec(ResearchSearch, '播客RSS说明语义+关键词检索。required_terms/excluded_terms在完整已存说明上做字面包含/排除筛选，筛选候选时使用这些参数，不从相关片段推断全文不含。返回候选总数、展示数和逐项全文检查；检索对象为RSS文字；覆盖数和实际返回原文分别计数。当前不支持搜索音频全文。', 'server', 'podcast', 'episode', changes_state=False, capability='research_v3', retry='explicit_read', retention='document'),

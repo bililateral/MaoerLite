@@ -22,6 +22,7 @@ from maoer_agent.research.sources import annotate, citation_context, valid_citat
 from maoer_agent.tools.results import checked_result, outcome_facts
 from maoer_agent.model.context import fit_context
 from maoer_agent.core.limits import MAX_MODEL_ATTEMPTS
+from maoer_agent.agent import episode_pages
 
 
 class AgentGraph:
@@ -120,20 +121,8 @@ class AgentGraph:
         return {'summary': saved['data'], 'summary_pending': len(pending), 'summary_candidates': [], **extra}
 
 
-    async def model_node(self, state):
-        if state['rounds'] >= MAX_MODEL_ROUNDS:
-            raise ModelFailure('tool_round_limit')
+    async def answer_message(self, state, available, final_only):
         run_id = state['run_id']
-        final_only = state.get('final_only', False) or state.get('tool_count', 0) >= MAX_TOOL_CALLS
-        available = definitions(state.get('extended_episodes', False), state.get('research', False),
-                                self.get_run(run_id)['input'].get('capabilities', []))
-        allowed = allowed_tools(state.get('route', {})) if state.get('research') else {d['function']['name'] for d in available}
-        # Read-only library access is an actual advertised tool, never a capability claim without an interface.
-        if any(d['function']['name'] == 'query_library' for d in available):
-            allowed.add('query_library')
-        if state.get('research'):
-            allowed.discard('search_podcast_content')
-        available = [] if final_only else [d for d in available if d['function']['name'] in allowed]
         names = {d['function']['name'] for d in available}
         base = [{'role': 'system', 'content': build_system(names, state.get('extended_episodes', False),
                     state.get('research', False), final_only)}, *state['messages'][1:]]
@@ -173,6 +162,57 @@ class AgentGraph:
                                   retry_at=int(time.time() + exc.delay))
                 await asyncio.sleep(exc.delay)
                 waited += exc.delay
+        return message, messages
+
+
+    async def page_message(self, state, names, final_only):
+        run_id = state['run_id']
+        async def discard(_): pass
+        while True:
+            run = self.get_run(run_id)
+            step = episode_pages.next_step(state, run, names, final_only)
+            if step['kind'] == 'verify':
+                self.store.update(run_id, phase='read_web_page')
+                try:
+                    verdict = await self.invoke_model(run_id, 'page_identity',
+                        replace(self.settings, agent_thinking=False),
+                        episode_pages.match_messages(state['route']['page_lookup'], step['item']), [], discard)
+                    matched = episode_pages.parse_match(verdict)
+                except (ValueError, TypeError, KeyError, AttributeError):
+                    raise ModelFailure('invalid_page_identity') from None
+                checks = dict(run.get('page_checks', {}))
+                checks[step['key']] = matched
+                self.store.update(run_id, page_checks=checks)
+                continue
+            if step['kind'] == 'answer':
+                self.store.update(run_id, page_resolution=step['resolution'])
+                return {'role': 'assistant', 'content': step['text']}
+            call_id = 'page_' + run_id + '_' + str(state.get('tool_count', 0))
+            return {'role': 'assistant', 'content': None, 'tool_calls': [{
+                'id': call_id, 'type': 'function', 'function': {
+                    'name': step['name'], 'arguments': json.dumps(step['arguments'], ensure_ascii=False)}}]}
+
+
+    async def model_node(self, state):
+        if state['rounds'] >= MAX_MODEL_ROUNDS:
+            raise ModelFailure('tool_round_limit')
+        run_id = state['run_id']
+        final_only = state.get('final_only', False) or state.get('tool_count', 0) >= MAX_TOOL_CALLS
+        available = definitions(state.get('extended_episodes', False), state.get('research', False),
+                                self.get_run(run_id)['input'].get('capabilities', []))
+        allowed = allowed_tools(state.get('route', {})) if state.get('research') else {d['function']['name'] for d in available}
+        # Read-only library access is an actual advertised tool, never a capability claim without an interface.
+        if any(d['function']['name'] == 'query_library' for d in available):
+            allowed.add('query_library')
+        if state.get('research'):
+            allowed.discard('search_podcast_content')
+        available = [] if final_only else [d for d in available if d['function']['name'] in allowed]
+        names = {d['function']['name'] for d in available}
+        if state.get('research') and episode_pages.active(state.get('route', {})):
+            message = await self.page_message(state, names, final_only)
+            messages = state['messages']
+        else:
+            message, messages = await self.answer_message(state, available, final_only)
         try:
             calls = validated_calls(message, state.get('extended_episodes', False))
         except (ValueError, KeyError, TypeError):
@@ -193,7 +233,9 @@ class AgentGraph:
             repair, _ = fit_context(repair, [], self.settings.context_budget_bytes,
                                     8192 if self.settings.agent_thinking else 4096)
             self.store.update(run_id, text='')
-            message = await self.invoke_model(run_id, 'citation_repair', self.settings, repair, [], publish)
+            async def publish_repair(text):
+                self.store.update(run_id, text=text, status='generating', retry_after=0)
+            message = await self.invoke_model(run_id, 'citation_repair', self.settings, repair, [], publish_repair)
             if message.get('tool_calls') or not valid_citations(message.get('content'), self.get_run(run_id).get('sources', [])):
                 raise ModelFailure('invalid_citation')
         route = state.get('route', {})

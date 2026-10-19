@@ -221,11 +221,11 @@ class RssResearch:
                     'evaluated_descriptions': len(rows), 'eligible_descriptions': sum(c['passes'] for c in checks.values()),
                     'incomplete_descriptions': sum(r['description_truncated'] for r in rows),
                     'scope': 'stored_RSS_descriptions_only_not_audio_or_synonyms',
-                    'conclusion_scope': '只证明term_counts中每个精确字面词的出现次数和组合筛选结果；其他词、同义声明、商业性质未检查。没有检查词时没有全文字面核验结论。'},
+                    'conclusion_scope': 'term_counts记录指定字面词的出现次数；筛选结果按包含词和排除词组合计算。未指定词时不进行字面筛选。'},
                 'negative_claim_supported': False,
                 'coverage_total': len(sources), 'semantic_indexed_passages': len(vectors) if vector is not None else 0,
                 'total_passages': len(entries), 'audio_analyzed': False,
-                'note': f'RSS可用源 {sum(bool(r) for _, r in feeds)}/{len(sources)}；相关候选 {matched_episodes} 条，返回 {len(items)} 条。索引覆盖只说明检索可用性，不是全文审阅。字面筛选仅证明指定词在已存说明中的包含/排除，不证明音频或同义表述；未经全文检查不将片段未见写成全文没有。'}
+                'note': f'RSS可用源 {sum(bool(r) for _, r in feeds)}/{len(sources)}；相关候选 {matched_episodes} 条，返回 {len(items)} 条。检索对象为已存RSS说明；字面筛选结果见逐项检查字段。'}
         if required_terms or excluded_terms:
             label = sources[0]['title'] if len(sources) == 1 else '所查询节目'
             lines = [f'{label}：已存RSS说明字面检查',
@@ -234,7 +234,7 @@ class RssResearch:
                      '排除条件（任一命中即排除）：' + json.dumps(excluded_terms, ensure_ascii=False)]
             lines += [f'精确词{json.dumps(c["literal_term"], ensure_ascii=False)}：{c["descriptions_containing"]}条说明包含。' for c in literal_counts]
             lines += [f'符合组合字面条件：{result["literal_filter"]["eligible_descriptions"]}条；相关性检索命中：{matched_episodes}条；实际展示：{len(items)}条。',
-                      '这是程序对本次已存RSS说明的统计，不是某一分集原文；截断部分及不可用来源未检查。只证明上述精确词，不证明同义表述、商业性质或音频内容。']
+                      '统计对象为本次已存RSS说明及上述精确词；截断部分和不可用来源未检查。']
             evidence = '\n'.join(lines)
             snapshot = json.dumps({'evidence': evidence, 'feeds': [(s['id'], f[0]) for s, f in zip(sources, feeds)]}, ensure_ascii=False)
             result['statistics'] = {'kind': 'rss_statistics', 'id': digest(snapshot),

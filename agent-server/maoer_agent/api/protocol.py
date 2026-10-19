@@ -5,6 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from maoer_agent.core.config import Settings
+from maoer_agent.core.limits import MAX_BATCH_CALLS, MAX_TOOL_DEFINITIONS
 
 
 class StrictModel(BaseModel):
@@ -25,7 +26,7 @@ class ToolCall(StrictModel):
 class Message(StrictModel):
     role: Literal['system', 'user', 'assistant', 'tool']
     content: str | None = Field(default=None, max_length=16000)
-    tool_calls: list[ToolCall] | None = Field(default=None, min_length=1, max_length=8)
+    tool_calls: list[ToolCall] | None = Field(default=None, min_length=1, max_length=MAX_BATCH_CALLS)
     tool_call_id: str | None = Field(default=None, min_length=1, max_length=256)
 
     @model_validator(mode='after')
@@ -63,7 +64,7 @@ class ChatRequest(StrictModel):
     messages: list[Message] = Field(min_length=1, max_length=40)
     stream: bool = False
     max_tokens: int = Field(default=1024, ge=1, le=2048)
-    tools: list[ToolDefinition] | None = Field(default=None, min_length=1, max_length=16)
+    tools: list[ToolDefinition] | None = Field(default=None, min_length=1, max_length=MAX_TOOL_DEFINITIONS)
     tool_choice: Literal['auto'] | None = None
 
     @model_validator(mode='after')

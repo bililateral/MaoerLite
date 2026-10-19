@@ -42,6 +42,7 @@ internal class AgentToolExecutor(
             result = if (call.name in setOf("list_episodes", "get_podcast_details", "search_podcast_content"))
                 error(failureText(e, rssFailureCode(e)), rssFailureCode(e))
             else if (call.name == "search_catalog") error(errorText("catalog_query_failed"), "catalog_query_failed")
+            else if (call.name == "query_library") error(errorText("library_read_failed"), "library_read_failed")
             else state("unknown", errorText("operation_unconfirmed")).let { snapshot ->
                 buildJsonObject { snapshot.forEach { (key, value) -> put(key, value) }; put("reason", "operation_unconfirmed") }
             }

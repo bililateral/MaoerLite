@@ -16,6 +16,7 @@ from maoer_agent.agent.graph import AgentGraph
 from maoer_agent.tools.results import outcome_facts
 from maoer_agent.storage.tasks import Store
 from maoer_agent.agent.state import State, TaskConflict, TERMINAL, MAX_TOOL_CALLS, MAX_MODEL_ROUNDS, READ_ONLY
+from maoer_agent.core.limits import GRAPH_RECURSION_LIMIT
 from maoer_agent.tools.dispatch import ToolDispatcher
 from maoer_agent.agent.selection import selection_identity_refresh, playback_preflight, episode_selection_question
 
@@ -49,7 +50,7 @@ class AgentTasks:
             # Keep conversation data local even if the shell has tracing env vars.
             while True:
                 with tracing_context(enabled=False):
-                    result = await self.graph.ainvoke(value, {'configurable': {'thread_id': run_id}, 'recursion_limit': 96}, durability='sync')
+                    result = await self.graph.ainvoke(value, {'configurable': {'thread_id': run_id}, 'recursion_limit': GRAPH_RECURSION_LIMIT}, durability='sync')
                 if result.get('__interrupt__'):
                     results = self.advance_batch(run_id, result['calls'])
                     if results is None:

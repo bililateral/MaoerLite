@@ -30,6 +30,9 @@ class ResearchTools:
 
     async def perform(self, call, run):
         name, args = call['name'], call['arguments']
+        if name == 'list_recent_updates':
+            from maoer_agent.research.updates import recent_updates
+            return await recent_updates(self.rss, **args)
         if name == 'search_rss': return await self.rss.search(**args)
         if name == 'read_episode_description': return await self.rss.read(**args)
         request_id = run['id'] + ':' + call['id']

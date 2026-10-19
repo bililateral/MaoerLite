@@ -31,7 +31,7 @@ internal class PlaybackStateReader(private val repository: PodcastRepository, pr
         put("queue_size", player.queue.value.size)
         put("queue_index", player.queue.value.indexOfFirst { it.id == selectedId })
         put("queue_position", player.queue.value.indexOfFirst { it.id == selectedId } + 1)
-        put("queue_scope", "当前播放器队列，可能经过筛选或排序；不能据此推断RSS总集数，两者数值可能相等也可能不同；队列位置不是标题期号。queue_position从1开始，0表示未在队列中找到。")
+        put("queue_scope", "当前播放器队列，按当前筛选和排序计数。RSS总集数通过节目目录查询。queue_position从1开始，0表示未在队列中找到。")
         put("sleep_remaining_ms", player.sleepTimer.value.remainingMs)
         put("sleep_end_of_episode", player.sleepTimer.value.endOfEpisode)
         put("playback_error", player.playbackError.value.orEmpty())

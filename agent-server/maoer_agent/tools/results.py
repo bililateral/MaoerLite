@@ -69,7 +69,7 @@ def checked_result(call, raw):
                 if parsed.items is None:
                     raise ValueError('missing_items')
                 for item in parsed.items:
-                    if item.kind != spec.result_kind:
+                    if item.kind not in ({'podcast', 'episode'} if spec.result_kind == 'library' else {spec.result_kind}):
                         raise ValueError('wrong_kind')
                     if item.kind == 'podcast' and len(item.id) > 150:
                         raise ValueError('podcast_id')
@@ -80,7 +80,7 @@ def checked_result(call, raw):
                             raise ValueError('wrong_podcast')
                     if call['name'] == 'read_episode_description' and item.id != call['arguments']['episode_id']:
                         raise ValueError('wrong_episode')
-                if parsed.has_more is True and call['name'] in ('list_episodes', 'read_web_page', 'read_episode_description'):
+                if parsed.has_more is True and call['name'] in ('list_episodes', 'read_web_page', 'read_episode_description', 'query_library', 'list_recent_updates'):
                     if parsed.next_offset is None or parsed.next_offset <= call['arguments'].get('offset', 0):
                         raise ValueError('invalid_page')
         # Don't inject defaults or coerce legacy values. Raw JSON stays immutable.

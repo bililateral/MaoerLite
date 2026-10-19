@@ -9,6 +9,7 @@ from maoer_agent.api.protocol import ChatRequest, Message
 from maoer_agent.model.rate_limit import Throttle, upstream_failure_code
 from maoer_agent.model.transport import limited_upstream, sse_data, TOTAL_TIMEOUT
 from maoer_agent.model.failures import timeout_kind
+from maoer_agent.core.limits import MAX_AGENT_MESSAGES, MAX_BATCH_CALLS
 
 
 class ModelFailure(Exception):
@@ -30,8 +31,8 @@ class AgentMessage(Message):
 
 
 class AgentChatRequest(ChatRequest):
-    # 24 sequential tool rounds plus bounded history and the final answer.
-    messages: list[AgentMessage] = Field(min_length=1, max_length=160)
+    # Sequential tool rounds plus bounded history and the final answer.
+    messages: list[AgentMessage] = Field(min_length=1, max_length=MAX_AGENT_MESSAGES)
     max_tokens: int = Field(default=4096, ge=1, le=8192)
 
 
@@ -122,7 +123,7 @@ async def generate(settings, messages, tools, publish, *, client, gate):
                         await publish(text)
                     for part in delta.get('tool_calls') or []:
                         index = part.get('index', 0)
-                        if type(index) is not int or not 0 <= index < 8:
+                        if type(index) is not int or not 0 <= index < MAX_BATCH_CALLS:
                             raise ModelFailure('invalid_tool_call')
                         call = calls.setdefault(index, {'id': '', 'type': 'function', 'function': {'name': '', 'arguments': ''}})
                         if part.get('id'): call['id'] = part['id']

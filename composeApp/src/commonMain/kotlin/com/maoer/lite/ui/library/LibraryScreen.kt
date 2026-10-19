@@ -18,6 +18,7 @@ import cafe.adriel.voyager.core.screen.Screen
 import cafe.adriel.voyager.navigator.LocalNavigator
 import com.maoer.lite.data.download.*
 import com.maoer.lite.data.library.ListeningLibrary
+import com.maoer.lite.data.library.LibraryQueries
 import com.maoer.lite.data.manager.PlayerManager
 import com.maoer.lite.data.model.Audio
 import com.maoer.lite.data.podcast.*
@@ -57,17 +58,9 @@ object LibraryScreen : Screen {
         var notice by remember { mutableStateOf<String?>(null) }
         val index = remember { PodcastSearchIndex(BuiltInPodcasts.sources) }
         val matchingPodcasts = remember(query) { index.search(query).map { it.id }.toSet() }
-        fun matches(audio: Audio) = query.isBlank() || audio.title.contains(query.trim(), true) ||
-            audio.author.contains(query.trim(), true) || audio.podcastId in matchingPodcasts
-        val selected = entries.filter { entry ->
-            matches(entry.audio) && when (tab) {
-                0 -> entry.lastPlayedAt > 0 && !entry.completed
-                1 -> entry.favorite
-                else -> entry.lastPlayedAt > 0 || entry.completed
-            }
-        }
-        val sourceBookmarks = BuiltInPodcasts.sources.filter { it.id in bookmarks && it.id in matchingPodcasts }
-        val selectedDownloads = downloaded.filter { matches(it.audio) }
+        val selected = LibraryQueries.entries(entries, tab, query, matchingPodcasts)
+        val sourceBookmarks = LibraryQueries.bookmarks(BuiltInPodcasts.sources, bookmarks, matchingPodcasts)
+        val selectedDownloads = downloaded.filter { LibraryQueries.matches(it.audio, query, matchingPodcasts) }
         val listState = remember(tab, query) { LazyListState() }
         fun play(audio: Audio, queue: List<Audio>) {
             manager.setPlaylist(queue)

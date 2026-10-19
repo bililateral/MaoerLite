@@ -2,8 +2,7 @@
 from typing import TypedDict
 
 TERMINAL = {'completed', 'cancelled', 'failed'}
-MAX_TOOL_CALLS = 24
-MAX_MODEL_ROUNDS = MAX_TOOL_CALLS + 1
+from maoer_agent.core.limits import MAX_TOOL_CALLS, MAX_MODEL_ROUNDS
 from maoer_agent.tools.definitions import READ_ONLY
 
 

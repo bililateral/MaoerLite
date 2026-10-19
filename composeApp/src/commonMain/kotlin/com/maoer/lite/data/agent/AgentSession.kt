@@ -44,7 +44,7 @@ class AgentSession(private val storage: AgentStorage, private val api: AgentApi,
             catch (_: Exception) { mutable.value = mutable.value.copy(notice = errorText("hint_save_failed")) }
         }
     }
-    private fun capabilities() = listOf("episode_selection_v2", "research_v3") +
+    private fun capabilities() = listOf("episode_selection_v2", "research_v3", "library_read_v1") +
         if (mutable.value.personalizedSearch) listOf("search_hints") else emptyList()
     suspend fun probeSsh(value: AgentSshConfig) = api.probeSsh(value)
     suspend fun configure(value: AgentConnection) = withContext(Dispatchers.Main) {

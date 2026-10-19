@@ -21,6 +21,7 @@ from maoer_agent.tools.definitions import SERVER_TOOLS
 from maoer_agent.research.sources import annotate, citation_context, valid_citations, current_citation_view
 from maoer_agent.tools.results import checked_result, outcome_facts
 from maoer_agent.model.context import fit_context
+from maoer_agent.core.limits import MAX_MODEL_ATTEMPTS
 
 
 class AgentGraph:
@@ -31,7 +32,7 @@ class AgentGraph:
     async def invoke_model(self, run_id, purpose, settings, messages, tools, publish):
         run = self.get_run(run_id)
         usage = dict(run.get('model_attempts', {}))
-        if sum(usage.values()) >= 80:
+        if sum(usage.values()) >= MAX_MODEL_ATTEMPTS:
             raise ModelFailure('model_attempt_budget_exhausted')
         usage[purpose] = usage.get(purpose, 0) + 1
         self.store.update(run_id, model_attempts=usage)
@@ -124,8 +125,12 @@ class AgentGraph:
             raise ModelFailure('tool_round_limit')
         run_id = state['run_id']
         final_only = state.get('final_only', False) or state.get('tool_count', 0) >= MAX_TOOL_CALLS
-        available = definitions(state.get('extended_episodes', False), state.get('research', False))
+        available = definitions(state.get('extended_episodes', False), state.get('research', False),
+                                self.get_run(run_id)['input'].get('capabilities', []))
         allowed = allowed_tools(state.get('route', {})) if state.get('research') else {d['function']['name'] for d in available}
+        # Read-only library access is an actual advertised tool, never a capability claim without an interface.
+        if any(d['function']['name'] == 'query_library' for d in available):
+            allowed.add('query_library')
         if state.get('research'):
             allowed.discard('search_podcast_content')
         available = [] if final_only else [d for d in available if d['function']['name'] in allowed]

@@ -33,12 +33,12 @@ internal class CatalogToolHandler(private val repository: PodcastRepository) {
                     if (repository.sources.any { it.category == query.trim() }) {
                         put("exact_category", query.trim())
                         put("category_total", repository.sources.count { it.category == query.trim() })
-                        put("note", "该分类数量已完整统计；不足时如实说明，不用同义词或拼音重复查找凑数，扩大类别需先询问用户。")
+                        put("note", "该分类的节目总数见category_total。")
                     }
                     putJsonArray("items") { matches.take(8).forEach { source -> add(buildJsonObject {
                         put("kind", "podcast"); put("id", source.id); put("title", source.title); put("category", source.category)
                         put("content_relevance_verified", false)
-                        put("match_note", "名称、分类或拼音匹配；不能据此认定节目内容与查询主题相关")
+                        put("match_note", "按名称、分类或拼音匹配；内容相关性需读取节目或分集说明")
                     }) } }
                 }
             }

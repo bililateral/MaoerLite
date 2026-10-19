@@ -1,0 +1,8 @@
+"""Shared protocol and execution bounds; page sizes are separate business limits."""
+MAX_BATCH_CALLS = 12
+MAX_TOOL_CALLS = 36
+MAX_TOOL_DEFINITIONS = 32
+MAX_AGENT_MESSAGES = 192
+MAX_MODEL_ROUNDS = MAX_TOOL_CALLS + 1
+MAX_MODEL_ATTEMPTS = 128
+GRAPH_RECURSION_LIMIT = MAX_MODEL_ROUNDS * 3 + 4

@@ -35,9 +35,9 @@ internal fun agentCatalogSummary(feed: PodcastFeed): JsonObject {
     }
     return buildJsonObject {
         put("available_items", feed.episodes.size)
-        put("scope", "当前可播放RSS目录全表；标题开头编号按规则识别，不代表完整发布历史或作者正式编号体系。")
+        put("scope", "当前可播放RSS目录全表；标题开头编号按规则解析。")
         putJsonObject("title_formats") {
-            put("scope", "本次完整可播放目录的标题格式全表分类；other_title仅指不匹配以下规则，不等于作者没有编号。")
+            put("scope", "本次完整可播放目录的标题格式分类；other_title为未匹配以下规则的标题。")
             put("evaluated_items", feed.episodes.size)
             put("all_season_episode", feed.episodes.isNotEmpty() && formats["season_episode"].orEmpty().size == feed.episodes.size)
             putJsonArray("groups") {
@@ -57,7 +57,7 @@ internal fun agentCatalogSummary(feed: PodcastFeed): JsonObject {
         put("max_title_number", maximum?.let { JsonPrimitive(it) } ?: JsonNull)
         put("unrecognized_title_number_items", unrecognized.size)
         put("repeated_number_items", numbered.size - counts.size)
-        put("missing_numbers_assumption", "仅按1到当前最高识别编号核对未出现的数字；不代表这些期曾发布、删除或收费。")
+        put("missing_numbers_assumption", "按1到当前最高识别编号列出未出现的数字；发布历史和删集原因未提供。")
         put("missing_number_count", missing.size)
         putJsonArray("missing_number_ranges") { ranges.take(40).forEach { add(it) } }
         put("missing_ranges_truncated", ranges.size > 40)
@@ -72,6 +72,6 @@ internal fun agentCatalogSummary(feed: PodcastFeed): JsonObject {
             put("raw_rss_items", it.rawItems); put("rejected_missing_title_or_audio", it.rejectedItems)
             put("omitted_after_1000_item_limit", it.cappedItems); put("duplicate_identity_items", it.duplicateItems)
         }
-        put("cause_limit", "只能证明当前目录与编号的差异；具体缺期原因需发布者说明，不能根据差值断言删集。")
+        put("cause_limit", "当前统计包含目录条目和识别出的数字期号；具体缺期原因尚未确认。")
     }
 }

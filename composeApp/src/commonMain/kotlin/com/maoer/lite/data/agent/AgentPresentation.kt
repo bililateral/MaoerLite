@@ -11,6 +11,7 @@ internal fun agentWorkLabel(run: AgentRun?): String {
     if (run?.status == "awaiting_tools") {
         val call = run.calls.singleOrNull()
         val action = when (call?.name) {
+            "query_library" -> "正在读取资料库…"
             "search_catalog" -> "正在查询节目目录…"
             "get_podcast_details" -> "正在读取节目详情…"
             "list_episodes" -> "正在查询分集列表…"
@@ -34,6 +35,7 @@ internal fun agentWorkLabel(run: AgentRun?): String {
     val responding = run?.text?.isNotBlank() == true
     val phase = when (run?.phase) {
         "intent" -> "正在理解你的要求…"
+        "list_recent_updates" -> "正在核对各档节目更新…"
         "model_planning" -> if (responding) "正在生成回复…" else "正在思考如何回答…"
         "model_analysis" -> if (responding) "正在生成回复…" else "正在整理已取得的结果…"
         "search_rss" -> "正在查找相关分集…"

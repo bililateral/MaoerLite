@@ -50,7 +50,7 @@ val appModule = module {
     single { PlayerManager(get(), get(), get(), get(), get()) }
     single { AgentStorage() }
     single { AgentApi(get()) }
-    single { AgentTools(get(), get(), get(), get()) }
+    single { AgentTools(get(), get(), get(), get(), get(), get()) }
     single { AgentSession(get(), get(), get()) }
     
     // ScreenModel (ViewModel)

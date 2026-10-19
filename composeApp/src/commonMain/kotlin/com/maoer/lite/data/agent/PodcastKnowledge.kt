@@ -88,7 +88,7 @@ class PodcastKnowledge(private val repository: PodcastRepository) {
             put("audio_analyzed", false)
             put("note", "已检索 ${loaded.count { it.feed != null }}/${sources.size} 个节目的可用 RSS 分集，" +
                 "其中 ${loaded.count { it.fresh }} 个本次更新核对成功。" +
-                if (hits.isEmpty()) "未找到在同一条标题和简介中同时包含全部关键词【${terms.joinToString("、")}】的资料；不能据此说其中任何单个词不存在，更不能证明没有广告或音频没涉及。" else "仅展示最多4条命中文案的节选，未分析音频；不能用这些片段断言全部RSS没有某种标注。")
+                if (hits.isEmpty()) "未找到在同一条标题和简介中同时包含全部关键词【${terms.joinToString("、")}】的资料。" else "返回最多4条命中文案节选，检索对象为RSS文字。")
             putJsonArray("items") {
                 hits.take(4).forEach { hit ->
                     val item = bySource.getValue(hit.document.podcastId)

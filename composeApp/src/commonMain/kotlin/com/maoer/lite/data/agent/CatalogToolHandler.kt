@@ -15,11 +15,6 @@ internal class CatalogToolHandler(private val repository: PodcastRepository) {
                 require(args.keys == setOf("podcast_id"))
                 knowledge.details(args.getValue("podcast_id").jsonPrimitive.content)
             }
-            "search_podcast_content" -> {
-                require(args.keys.all { it in setOf("keywords", "podcast_id") })
-                val keywords = args.getValue("keywords").jsonArray.map { it.jsonPrimitive.content }
-                knowledge.search(keywords, args["podcast_id"]?.jsonPrimitive?.content.orEmpty())
-            }
             "search_catalog" -> {
                 require(args.keys == setOf("query"))
                 val query = args.getValue("query").jsonPrimitive.content
@@ -53,6 +48,6 @@ internal class CatalogToolHandler(private val repository: PodcastRepository) {
         }
     }
     companion object {
-        val names = setOf("get_podcast_details", "search_podcast_content", "search_catalog", "list_episodes")
+        val names = setOf("get_podcast_details", "search_catalog", "list_episodes")
     }
 }

@@ -232,7 +232,7 @@ class AgentGraph:
             try:
                 checked = await classify(route_model, self.settings, state['messages'], [], disputed)
                 route = {**route, 'device': route.get('device', False) or checked['device']}
-                allowed = allowed_tools(route) - {'search_podcast_content'}
+                allowed = allowed_tools(route)
                 self.store.update(run_id, route=route)
             except ModelFailure as exc:
                 if exc.code == 'model_attempt_budget_exhausted':

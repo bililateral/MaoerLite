@@ -12,8 +12,6 @@ def tool_scope(route, capabilities, extended, research, final_only):
     allowed = allowed_tools(route) if research else {d['function']['name'] for d in available}
     if any(d['function']['name'] == 'query_library' for d in available):
         allowed.add('query_library')
-    if research:
-        allowed.discard('search_podcast_content')
     return ([] if final_only else [d for d in available if d['function']['name'] in allowed]), allowed
 
 
@@ -35,8 +33,7 @@ def prepare_calls(messages, memory, calls, message, allowed, run_id, rounds):
                 'function': {'name': 'get_playback_state', 'arguments': '{}'}}]}
         for call in calls:
             args = call['arguments']
-            if (call['name'] in ('list_episodes', 'get_podcast_details') or
-                (call['name'] == 'search_podcast_content' and args.get('podcast_id'))) and not any(
+            if call['name'] in ('list_episodes', 'get_podcast_details') and not any(
                     (item.get('id') == args['podcast_id'] and item.get('kind') == 'podcast') or
                     (item.get('podcast_id') == args['podcast_id'] and item.get('kind') == 'episode') for item in known):
                 invalid_identities[call['id']] = 'unverified_podcast_id'

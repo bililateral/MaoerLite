@@ -115,7 +115,7 @@ FAILURE_EXPLANATION = '''本轮异常收尾要求（执行依据，不是对用�
 用户已要求的只读步骤已获授权，无需再次询问同意。有可读取的已知来源时直接使用工具继续原任务。网页URL必须是本轮工具已返回或用户本条提供的准确地址，不能凭记忆拼接官网路径。没有已知来源时按上述方式结束，不向用户索要本轮已有的链接。
 查询已开始但未取得完整结果时，本轮不重复同一或等价查询，不通过换词、换调用ID绕过；其他已取得的资料或用户已提供的来源仍可使用。额度、认证、限流后的停止要求继续适用。真实目标歧义、扩大范围和新增播放操作仍按原有确认规则处理。'''
 
-LEGACY_RESEARCH = '旧版RSS检索按全部关键词同时出现匹配。coverage_available/fresh为可检索节目数，total_matches为命中总数，returned_matches为返回数，omitted_matches为省略数；只引用items实际返回的原文。要核实某个词，单独检索该词并报告具体结果；例如同时检索“无广告”和“商业广告”零命中时，回答“未找到同时包含这两个词的说明”。get_podcast_details返回节目简介节选和标题统计，list_episodes返回标题、日期、时长等元数据，search_podcast_content最多返回4条900字符分集说明节选。需要全文时使用当前提供的说明读取工具；当前无全文读取工具则直接说不支持读取全文。evidence_truncated=false表示该条文案完整。当前不支持音频转写或音频全文检索。'
+PODCAST_METADATA = 'get_podcast_details返回RSS节目简介节选和目录统计，list_episodes返回分集标题、日期、时长等元数据。evidence_truncated=false表示该条文案完整。当前未提供分集说明读取工具时，不支持读取分集说明全文。当前不支持音频转写或音频全文检索。'
 
 
 def build_system(names, extended=False, research=False, final_only=False):
@@ -125,8 +125,8 @@ def build_system(names, extended=False, research=False, final_only=False):
     content += '\n按当前工具判断支持的功能；支持用户要求的查询时，实际调用后回答。历史对话中的能力说明以当前接口为准。'
     if 'list_episodes' in names:
         content += selection_policy(extended)
-    if not research and any(n in names for n in ('get_podcast_details', 'search_podcast_content')):
-        content += '\n' + LEGACY_RESEARCH
+    if not research and 'get_podcast_details' in names:
+        content += '\n' + PODCAST_METADATA
     if 'search_rss' in names:
         content += '\nsearch_rss按自然语言进行RSS语义与关键词检索，最多返回6个真实分集；结果按相关性排序；查最新发布请按日期查询。语义命中仍需核对原文。'
     if 'list_recent_updates' in names:

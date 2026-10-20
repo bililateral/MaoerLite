@@ -45,7 +45,6 @@ internal fun agentWorkLabel(run: AgentRun?): String {
             "search_catalog" -> "正在查询节目目录…"
             "get_podcast_details" -> "正在读取节目详情…"
             "list_episodes" -> "正在查询分集列表…"
-            "search_podcast_content" -> "正在检索节目说明…"
             "get_playback_state" -> "正在读取播放状态…"
             "play_episode" -> "正在播放所选分集…"
             "pause_playback" -> "正在暂停播放…"

@@ -38,18 +38,6 @@ class PodcastDetails(StrictModel):
     podcast_id: str = Field(min_length=1, max_length=150)
 
 
-class ContentSearch(StrictModel):
-    keywords: list[str] = Field(min_length=1, max_length=4)
-    podcast_id: str = Field(default='', max_length=150)
-
-    @field_validator('keywords')
-    @classmethod
-    def keyword_lengths(cls, values):
-        if any(not 2 <= len(value.strip()) <= 30 for value in values):
-            raise ValueError('Use 1..4 short keywords of 2..30 characters')
-        return [value.strip() for value in values]
-
-
 class Empty(StrictModel):
     pass
 
@@ -147,7 +135,6 @@ TOOLS = {
     'search_catalog': ToolSpec(Search, '搜索本机真实播客目录，支持中文、分类、全拼和拼音首字母。返回最多8个候选，total是总命中，returned/omitted标明实际展示和省略数量；has_more为true时需缩小关键词，不把前8项当全部。多个匹配时请用户选择。', 'device', 'podcast', 'podcast', changes_state=False, capability='', retry='explicit_read', retention='receipt'),
     'list_episodes': ToolSpec(Episodes, '查询真实RSS分集，每页最多8项，offset分页。query仅匹配标题文字；episode_number精确匹配标题开头期号；position选择指定order完整列表的第N条(从1起)，与标题期号不同。position/episode_number/query不能混用，position时offset必须0。order=newest按时间倒序，source按节目页原始顺序，reverse_source按节目页倒序。feed_total是总条目数，不是最大期号；零匹配仅说明本次条件无匹配。仅latest_verified=true能确定最新一期。', 'device', 'podcast', 'episode', changes_state=False, capability='', retry='explicit_read', retention='receipt'),
     'get_podcast_details': ToolSpec(PodcastDetails, '读取已查询节目ID的真实RSS节目简介、作者与目录统计（新版客户端提供catalog_summary）。统计覆盖完整可用列表的标题编号、缺口、重复、未识别数字期号项与解析筛除计数，用于核查总集数和期号差异；返回来源及刷新/缓存状态。', 'device', 'podcast', 'podcast', changes_state=False, capability='', retry='explicit_read', retention='receipt'),
-    'search_podcast_content': ToolSpec(ContentSearch, '按内容查找分集。keywords填1到4个简短关键词（每词2到30字），将每条分集的标题与简介合并后匹配全部关键词，不要求标题和简介分别都含这些词；不要填整句。留空podcast_id搜索全部内置节目，指定时必须是已知ID。最多返回4个相关分集及RSS原文依据；覆盖不全/缓存会明确标记。使用关键词字面检索，检索对象为RSS文字。', 'device', 'podcast', 'episode', changes_state=False, capability='', retry='explicit_read', retention='receipt'),
     'get_playback_state': ToolSpec(Empty, '查询手机当前选中的分集及所属节目ID/名称、实际播放或暂停状态、倍速与睡眠定时。不论播放还是暂停都可查询；没有选中或身份尚未同步时身份字段为空。', 'device', 'device', 'playback', changes_state=False, capability='', retry='explicit_read', retention='receipt'),
     'play_episode': ToolSpec(Play, '播放此前查询结果中的真实 episode_id，恢复既有进度，并保留该节目的完整循环队列。', 'device', 'device', 'playback', changes_state=True, capability='', retry='never_replay', retention='receipt'),
     'pause_playback': ToolSpec(Empty, '暂停手机当前播放。', 'device', 'device', 'playback', changes_state=True, capability='', retry='never_replay', retention='receipt'),

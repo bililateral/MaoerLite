@@ -4,19 +4,14 @@ import json
 import time
 import logging
 import httpx
+from maoer_agent.contracts.errors import ModelFailure
 from pydantic import Field, model_validator
-from maoer_agent.api.protocol import ChatRequest, Message
-from maoer_agent.model.rate_limit import Throttle, upstream_failure_code
-from maoer_agent.model.transport import limited_upstream, sse_data, TOTAL_TIMEOUT
+from maoer_agent.contracts.chat import ConversationRequest, Message
+from maoer_agent.model.provider import request_body, open_response, response_failure
+from maoer_agent.model.rate_limit import Throttle
+from maoer_agent.model.transport import sse_data, TOTAL_TIMEOUT
 from maoer_agent.model.failures import timeout_kind
 from maoer_agent.core.limits import MAX_AGENT_MESSAGES, MAX_BATCH_CALLS
-
-
-class ModelFailure(Exception):
-    def __init__(self, code, retryable=False, delay=0, details=None):
-        self.code, self.retryable, self.delay = code, retryable, delay
-        self.details = details or {}
-        super().__init__(code)
 
 
 class AgentMessage(Message):
@@ -30,7 +25,7 @@ class AgentMessage(Message):
         return self
 
 
-class AgentChatRequest(ChatRequest):
+class AgentChatRequest(ConversationRequest):
     # Sequential tool rounds plus bounded history and the final answer.
     messages: list[AgentMessage] = Field(min_length=1, max_length=MAX_AGENT_MESSAGES)
     max_tokens: int = Field(default=4096, ge=1, le=8192)
@@ -43,18 +38,7 @@ async def generate(settings, messages, tools, publish, *, client, gate):
                                                   'stream': True, 'max_tokens': 8192 if settings.agent_thinking else 4096})
     except ValueError:
         raise ModelFailure('invalid_model_request') from None
-    body = payload.upstream_body(settings)
-    if settings.agent_thinking:
-        body['thinking'] = {'type': 'enabled'}
-        body['reasoning_effort'] = settings.reasoning_effort
-        body.pop('tool_choice', None)
-        for message in body['messages']:
-            if message['role'] == 'assistant':
-                message.setdefault('reasoning_content', '')
-                message['content'] = message.get('content') or ''
-    else:
-        for message in body['messages']:
-            message.pop('reasoning_content', None)
+    body = request_body(payload, settings, agent=True)
     refusal = gate.enter()
     if isinstance(refusal, Throttle):
         raise ModelFailure(refusal.code, refusal.retryable, refusal.retry_after)
@@ -76,23 +60,13 @@ async def generate(settings, messages, tools, publish, *, client, gate):
     try:
         async def read():
             nonlocal response, text, reasoning, headers_at, first_data, last_data
-            request = client.build_request('POST', settings.endpoint,
-                headers={'Authorization': 'Bearer ' + settings.api_key}, json=body)
-            response = await client.send(request, stream=True)
+            response = await open_response(client, settings, body)
             headers_at = time.monotonic()
-            if response.status_code == 429:
-                try:
-                    data = await limited_upstream(response, 16384)
-                except (ValueError, UnicodeError, httpx.HTTPError):
-                    data = {}
-                limit = gate.limiter.record(data, response.headers.get('Retry-After'))
-                raise ModelFailure(limit.code, limit.retryable, limit.retry_after)
-            if response.status_code != 200:
-                try:
-                    data = await limited_upstream(response, 16384)
-                except (ValueError, UnicodeError, httpx.HTTPError):
-                    data = {}
-                raise ModelFailure(upstream_failure_code(response.status_code, data), details={'http_status': response.status_code})
+            failure = await response_failure(response, gate)
+            if isinstance(failure, Throttle):
+                raise ModelFailure(failure.code, failure.retryable, failure.retry_after)
+            if failure:
+                raise ModelFailure(failure, details={'http_status': response.status_code})
             finish = None
             async for raw in sse_data(response, started + TOTAL_TIMEOUT):
                 last_data = time.monotonic()

@@ -1,14 +1,20 @@
 """Sequential device dispatch and durable receipts, independent of model planning."""
 import hashlib
 import json
-from langgraph.types import Command
+from dataclasses import dataclass
 from maoer_agent.agent.state import TaskConflict, READ_ONLY
 from maoer_agent.tools.results import checked_result
 
 
+@dataclass(frozen=True)
+class Submission:
+    run: dict
+    resume: list | None = None
+
+
 class ToolDispatcher:
-    def __init__(self, store, get_run, jobs, launch):
-        self.store, self.get_run, self.jobs, self.launch = store, get_run, jobs, launch
+    def __init__(self, store, get_run):
+        self.store, self.get_run = store, get_run
 
     def advance_batch(self, run_id, calls):
         """Persist one pending device call, or return a complete ordered batch.
@@ -51,14 +57,14 @@ class ToolDispatcher:
         return run
 
 
-    def submit(self, run_id, results):
+    def submit(self, run_id, results, *, busy=False):
         run = self.get_run(run_id)
         if len(results) != 1: raise TaskConflict('single_result_required')
         fingerprint = hashlib.sha256(json.dumps(results, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         key = ','.join(r['call_id'] for r in results)
         if key in run['receipts']:
             if run['receipts'][key] != fingerprint: raise TaskConflict('tool_result_changed')
-            return run
+            return Submission(run)
         if run['status'] == 'cancelled':
             # A claimed operation can finish just after cancellation. Preserve
             # its actual receipt, but never resume the graph or dispatch more.
@@ -68,8 +74,8 @@ class ToolDispatcher:
             call = next(c for c in run['batch'] if c['id'] == key)
             run.setdefault('raw_results', {})[key] = results[0]['result']
             run['results'].append({'call_id': key, 'result': checked_result(call, results[0]['result'])})
-            return self.store.put(run)
-        if run['status'] != 'awaiting_tools' or run_id in self.jobs: raise TaskConflict('tool_not_pending')
+            return Submission(self.store.put(run))
+        if run['status'] != 'awaiting_tools' or busy: raise TaskConflict('tool_not_pending')
         if [r['call_id'] for r in results] != [c['id'] for c in run['calls']]: raise TaskConflict('tool_id_mismatch')
         if any(r['call_id'] not in run['claimed'] for r in results): raise TaskConflict('tool_not_claimed')
         run['receipts'][key] = fingerprint
@@ -81,6 +87,4 @@ class ToolDispatcher:
             run['control_blocked'] = True
         self.store.put(run)
         completed = self.advance_batch(run_id, run.get('batch', run['calls']))
-        if completed is not None:
-            self.launch(run_id, Command(resume=completed))
-        return self.get_run(run_id)
+        return Submission(self.get_run(run_id), completed)

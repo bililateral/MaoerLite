@@ -7,9 +7,9 @@ import time
 import httpx
 import sqlite3
 import xml.etree.ElementTree as ET
-from pathlib import Path
 from importlib.resources import files
 from urllib.parse import urlsplit
+from maoer_agent.model.embeddings import Embeddings
 from maoer_agent.research.store import digest
 from maoer_agent.core.errors import error_message
 
@@ -68,22 +68,11 @@ def chunks(row):
 
 
 class RssResearch:
-    def __init__(self, store, client, model_dir):
-        self.store, self.client, self.model_dir = store, client, str(model_dir)
+    def __init__(self, store, client, embeddings: Embeddings):
+        self.store, self.client, self.embeddings = store, client, embeddings
         self.slots = asyncio.Semaphore(3)
-        self.embedding_lock = asyncio.Lock()
-        self.encoder = None
         self.background = None
         self.closed = False
-
-    def encoder_sync(self):
-        if self.encoder is None:
-            from fastembed import TextEmbedding
-            # Use the pinned artifact directly: Hub cache metadata contains host-specific paths.
-            snapshot = Path(self.model_dir) / 'models--Qdrant--bge-small-zh-v1.5' / 'snapshots' / '46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59'
-            self.encoder = TextEmbedding('BAAI/bge-small-zh-v1.5', cache_dir=self.model_dir, threads=4,
-                                         local_files_only=True, specific_model_path=str(snapshot))
-        return self.encoder
 
     async def load(self, source, force=False, diagnostics=None):
         fetched, rows = self.store.feed(source['id'])
@@ -122,7 +111,7 @@ class RssResearch:
         for row in rows:
             for start, text in chunks(row):
                 encoded = row['title'][:80] + '\n' + text
-                yield digest('bge-small-zh-v1.5:' + encoded), row, start, text, encoded
+                yield digest(self.embeddings.namespace + encoded), row, start, text, encoded
 
     async def index_rows(self, rows):
         entries = list(self.entries(rows))
@@ -130,10 +119,7 @@ class RssResearch:
         missing = list({e[0]: e[4] for e in entries if e[0] not in known}.items())
         for offset in range(0, len(missing), 32):
             batch = missing[offset:offset + 32]
-            async with self.embedding_lock:
-                def encode():
-                    return [v.astype('float32').tobytes() for v in self.encoder_sync().embed([b[1] for b in batch], batch_size=32)]
-                vectors = await asyncio.to_thread(encode)
+            vectors = await self.embeddings.documents([b[1] for b in batch])
             self.store.save_vectors([(b[0], v) for b, v in zip(batch, vectors)])
             await asyncio.sleep(0)
 
@@ -184,8 +170,7 @@ class RssResearch:
         vectors = self.store.vectors([e[0] for e in entries])
         vector = None
         try:
-            async with self.embedding_lock:
-                vector = await asyncio.to_thread(lambda: next(iter(self.encoder_sync().query_embed(query))))
+            vector = await self.embeddings.query(query)
         except Exception:
             pass
         terms = re.findall(r'[a-z0-9]+|[\u4e00-\u9fff]{2}', query.lower())

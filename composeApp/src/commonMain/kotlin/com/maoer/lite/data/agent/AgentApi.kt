@@ -17,7 +17,7 @@ import com.maoer.lite.data.error.AppFailure
 class AgentApiException(val code: String, val status: Int) : Exception(code)
 
 class AgentApi(
-    private val storage: AgentStorage,
+    private val connection: suspend () -> AgentConnection,
     private val transport: AgentTransport = AgentTransport(),
     private val client: HttpClient = agentHttpClient(),
     private val probeFactory: () -> AgentTransport = { AgentTransport() },
@@ -47,7 +47,7 @@ class AgentApi(
         } finally { withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { probe.close() } }
     }
     private suspend fun request(path: String, value: String? = null, post: Boolean = false): AgentRun {
-        val connection = storage.connection()
+        val connection = connection()
         if (connection.token.isBlank()) throw AppFailure("connection_missing")
         val response = client.request(transport.endpoint(connection) + path) {
             method = if (post) HttpMethod.Post else HttpMethod.Get
@@ -74,7 +74,7 @@ class AgentApi(
     suspend fun get(id: String) = request("/v1/agent/runs/$id")
     suspend fun sourceText(id: String, number: Int): AgentSourceText {
         require(number in 1..48)
-        val connection = storage.connection()
+        val connection = connection()
         val response = client.get(transport.endpoint(connection) + "/v1/agent/runs/$id/sources/$number") {
             header(HttpHeaders.Authorization, "Bearer ${connection.token}")
         }
@@ -87,7 +87,7 @@ class AgentApi(
     suspend fun claim(id: String, call: String) = request("/v1/agent/runs/$id/claim/${call.encodeURLPathPart()}", post = true)
     suspend fun results(id: String, values: List<AgentReceipt>) = request("/v1/agent/runs/$id/results", json.encodeToString(AgentResults(values)), true)
     suspend fun deleteConversation(id: String) {
-        val connection = storage.connection()
+        val connection = connection()
         if (connection.token.isBlank()) throw AppFailure("connection_missing")
         val response = client.request(transport.endpoint(connection) + "/v1/agent/conversations/${id.encodeURLPathPart()}") {
             method = HttpMethod.Delete
@@ -100,7 +100,7 @@ class AgentApi(
             (result["conversation_id"] as? JsonPrimitive)?.contentOrNull != id) throw AppFailure("service_response_invalid")
     }
     suspend fun events(id: String, update: suspend (AgentRun) -> Unit) {
-        val connection = storage.connection()
+        val connection = connection()
         client.prepareGet(transport.endpoint(connection) + "/v1/agent/runs/$id/events") {
             header(HttpHeaders.Authorization, "Bearer ${connection.token}")
         }.execute { response ->

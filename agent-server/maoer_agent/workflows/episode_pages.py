@@ -1,19 +1,9 @@
 """Evidence-driven episode-page lookup, using the normal durable tool boundary."""
 import hashlib
 import json
-from urllib.parse import quote
-from pydantic import BaseModel, ConfigDict, Field
-from maoer_agent.agent.memory import last_turn
-
-
-class PageLookup(BaseModel):
-    model_config = ConfigDict(strict=True, extra='forbid')
-    requested: bool = False
-    exclusive: bool = False
-    podcast_title: str = Field(default='', max_length=150)
-    episode_title: str = Field(default='', max_length=300)
-    query: str = Field(default='', max_length=300)
-    other_tasks: list[str] = Field(default_factory=list, max_length=8)
+from maoer_agent.core.urls import public_url
+from maoer_agent.contracts.execution import PageView
+from maoer_agent.memory.history import last_turn
 
 
 def active(route):
@@ -33,8 +23,9 @@ def observations(messages):
     return rows
 
 
-def _answer(text, status, **data):
-    return {'kind': 'answer', 'text': text, 'resolution': {'status': status, **data}}
+def _answer(status, title='', **data):
+    resolution = {'status': status, **{k: v for k, v in data.items() if k in ('url', 'source')}}
+    return {'kind': 'answer', 'resolution': resolution, 'presentation': {'title': title, **data}}
 
 
 def _call(name, **arguments):
@@ -43,16 +34,6 @@ def _call(name, **arguments):
 
 def _key(lookup, item):
     return hashlib.sha256(json.dumps([lookup, item], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
-
-
-def _text(value):
-    for character in ('\\', '[', ']', '*', '_', '`'):
-        value = value.replace(character, '\\' + character)
-    return value.replace('\n', ' ').replace('\r', ' ')
-
-
-def _link(url):
-    return '[打开分集网页](' + quote(url, safe="/:?#[]@!$&'*+,;=%~.-_") + ')'
 
 
 def match_messages(lookup, item):
@@ -73,15 +54,12 @@ def parse_match(message):
     return data['matches']
 
 
-def next_step(state, run, names, final_only=False):
+def next_step(view: PageView, names, final_only=False):
     """No approval text is generated: a lookup ends in a typed business result."""
-    from maoer_agent.research.tools import public_url
-    from maoer_agent.research.rss import CATALOG
-    lookup = state['route']['page_lookup']
+    lookup = view.route['page_lookup']
     title = lookup['episode_title'] or lookup['query']
-    subject = f'《{_text(title)}》'
-    current = observations(last_turn(state['messages']))
-    all_rows = observations(state['messages'])
+    current = observations(last_turn(view.messages))
+    all_rows = observations(view.messages)
     items = [item for _, result in all_rows if result.get('status') == 'ok'
              for item in result.get('items', [])]
     podcast_name = lookup['podcast_title'].strip().casefold()
@@ -94,8 +72,7 @@ def next_step(state, run, names, final_only=False):
         if len(candidates) == 1:
             podcasts = {candidates[0]['id']: candidates[0]}
         elif len(candidates) > 1:
-            choices = '\n'.join(f"{n}. {i['title']}" for n, i in enumerate(candidates, 1))
-            return _answer('查到多个节目，请选择：\n' + choices, 'ambiguous')
+            return _answer('ambiguous', candidates=candidates, candidate_kind='podcast')
     episodes = {}
     for item in items:
         if item.get('kind') != 'episode' or not episode_name:
@@ -112,15 +89,13 @@ def next_step(state, run, names, final_only=False):
                 item = result['items'][0]
                 episodes = {item['id']: item}
     if len(episodes) > 1:
-        choices = '\n'.join(f"{n}. {i['title']}（{i.get('podcast_title', '')}，{i.get('published', '日期未知')}）"
-                            for n, i in enumerate(list(episodes.values())[:8], 1))
-        return _answer('查到多个同名分集，请选择：\n' + choices, 'ambiguous')
-    feed_urls = {i['feed_url'] for i in CATALOG}
+        return _answer('ambiguous', candidates=list(episodes.values())[:8], candidate_kind='episode')
+    feed_urls = view.feed_urls
     for episode in episodes.values():
         url = episode.get('original_url', '')
         if public_url(url) and url not in feed_urls and url != episode.get('source_url'):
-            return _answer(f"{subject}的独立网页：{_link(url)}。", 'found', url=url, source='rss')
-    if not final_only and state['route'].get('network_allowed', True) and len(episodes) == 1:
+            return _answer('found', title, url=url, source='rss')
+    if not final_only and view.route.get('network_allowed', True) and len(episodes) == 1:
         episode = next(iter(episodes.values()))
         description_read = any(c['name'] == 'read_episode_description' and c['arguments'].get('episode_id') == episode['id']
                                for c, _ in current)
@@ -133,26 +108,26 @@ def next_step(state, run, names, final_only=False):
             podcast_id = next(iter(podcasts))
             already_read = any(c['name'] == 'list_episodes' and c['arguments'].get('podcast_id') == podcast_id
                                for c, _ in current)
-            if (not already_read and state['route'].get('network_allowed', True)
+            if (not already_read and view.route.get('network_allowed', True)
                     and 'list_episodes' in names and len(lookup['episode_title']) <= 100):
                 return _call('list_episodes', podcast_id=podcast_id, query=lookup['episode_title'],
                              order='newest', offset=0, position=0, episode_number=0)
-    if not state['route'].get('network_allowed', True):
-        return _answer(f'现有节目资料中没有找到{subject}的独立网页链接。', 'local_only')
+    if not view.route.get('network_allowed', True):
+        return _answer('local_only', title)
     searches = [(c, r) for c, r in current if c['name'] == 'web_search']
     if not searches:
         if final_only:
-            return _answer(f'本次查询额度已用完，未能取得{subject}的独立网页链接。', 'budget_exhausted')
+            return _answer('budget_exhausted', title)
         if 'web_search' not in names:
-            return _answer('当前不支持搜索独立网页链接。', 'unsupported')
+            return _answer('unsupported')
         return _call('web_search', query=lookup['query'])
     web_rows = [(c, r) for c, r in current if c['name'] in ('web_search', 'read_web_page')]
     stop_codes = {'web_auth_failed', 'web_rate_limited', 'web_quota_exhausted', 'web_budget_exhausted',
                   'web_paid_plan_blocked', 'web_not_configured', 'web_request_recorded'}
     if any(r.get('status') == 'unknown' or r.get('code') in stop_codes for _, r in web_rows):
-        return _answer(f'网页查询未能取得完整结果，无法确认{subject}的独立网页链接。', 'unavailable')
+        return _answer('unavailable', title)
     if any(r.get('status') != 'ok' for _, r in searches):
-        return _answer(f'网页搜索失败，未能取得{subject}的独立网页链接。', 'search_failed')
+        return _answer('search_failed', title)
     reads = [(c, r) for c, r in current if c['name'] == 'read_web_page']
     for _, result in reads:
         if result.get('status') != 'ok':
@@ -162,14 +137,12 @@ def next_step(state, run, names, final_only=False):
             if not public_url(url) or url in feed_urls or item.get('evidence_field') != '网页正文节选':
                 continue
             key = _key(lookup, item)
-            checks = run.get('page_checks', {})
+            checks = view.checks
             if key not in checks:
                 return {'kind': 'verify', 'key': key, 'item': item}
             if checks[key]:
-                number = next((s['number'] for s in run.get('sources', []) if s.get('source_url') == url), None)
-                citation = f'[{number}]' if number else ''
-                return _answer(f'{subject}的独立网页：{_link(url)}。{citation}',
-                               'found', url=url, source='web')
+                number = next((s['number'] for s in view.sources if s.get('source_url') == url), None)
+                return _answer('found', title, url=url, source='web', citation=number)
     attempted = {c['arguments']['url'] for c, _ in reads}
     candidates = list(dict.fromkeys(i.get('source_url', '') for _, result in searches
                                    for i in result.get('items', [])))
@@ -178,7 +151,7 @@ def next_step(state, run, names, final_only=False):
             if public_url(url) and url not in feed_urls and url not in attempted:
                 return _call('read_web_page', url=url, query='', offset=0)
     if final_only and any(url not in attempted for url in candidates):
-        return _answer(f'本次查询额度已用完，未能核实{subject}的独立网页链接。', 'budget_exhausted')
+        return _answer('budget_exhausted', title, verification=True)
     if any(r.get('status') != 'ok' for _, r in reads):
-        return _answer(f'网页读取失败，未能核实{subject}的独立网页链接。', 'read_failed')
-    return _answer(f'本次搜索未找到{subject}的独立网页链接。', 'not_found')
+        return _answer('read_failed', title)
+    return _answer('not_found', title)

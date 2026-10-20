@@ -6,23 +6,23 @@ MaoerLite 是一款 Android 播客点播器，以公开 RSS 为内容入口，�
 
 ## 页面预览
 
-以下八张页面图采集自上述版本 APK 的 Android 模拟器运行界面。
+以下八张页面图采集自当前 APK 的 Android 真机运行界面，均不包含系统状态栏。播放页展示控制区，点播助手展示资料库查询结果和停止状态。
 
 | 首页 | 分类 |
 | --- | --- |
-| <img src="docs/screenshots/current-home-emulator.png" alt="首页：精选节目与独立底部导航" width="340"> | <img src="docs/screenshots/current-categories-emulator.png" alt="分类：左侧目录与右侧节目网格" width="340"> |
+| <img src="docs/screenshots/current-home-device.png" alt="首页：精选节目与独立底部导航" width="340"> | <img src="docs/screenshots/current-categories-device.png" alt="分类：左侧目录与右侧节目网格" width="340"> |
 
 | 节目详情 | 播放页 |
 | --- | --- |
-| <img src="docs/screenshots/current-podcast-emulator.png" alt="节目详情：简介和真实RSS分集列表" width="340"> | <img src="docs/screenshots/current-player-emulator.png" alt="播放页：封面、进度和播放控制" width="340"> |
+| <img src="docs/screenshots/current-podcast-device.png" alt="节目详情：简介和真实RSS分集列表" width="340"> | <img src="docs/screenshots/current-player-device.png" alt="播放页：封面、进度和播放控制" width="340"> |
 
 | 继续收听 | 收藏 |
 | --- | --- |
-| <img src="docs/screenshots/current-library-continue-emulator.png" alt="资料库：继续收听" width="340"> | <img src="docs/screenshots/current-library-favorites-emulator.png" alt="资料库：节目与分集收藏" width="340"> |
+| <img src="docs/screenshots/current-library-continue-device.png" alt="资料库：继续收听" width="340"> | <img src="docs/screenshots/current-library-favorites-device.png" alt="资料库：节目与分集收藏" width="340"> |
 
 | 收听历史 | 点播助手 |
 | --- | --- |
-| <img src="docs/screenshots/current-library-history-emulator.png" alt="资料库：逐集收听历史" width="340"> | <img src="docs/screenshots/current-agent-emulator.png" alt="点播助手：文字输入和查询建议" width="340"> |
+| <img src="docs/screenshots/current-library-history-device.png" alt="资料库：逐集收听历史" width="340"> | <img src="docs/screenshots/current-agent-device.png" alt="点播助手：文字输入和查询建议" width="340"> |
 
 ## 功能说明
 
@@ -182,9 +182,13 @@ composeApp/src/
 │   ├── data/manager/       # 播放状态、队列、定时规则与 PlaybackSnapshotStore 快照存储
 │   ├── data/download/      # 下载模型与接口
 │   ├── data/agent/
-│   │   ├── AgentApi.kt        # 任务HTTP接口、SSE快照与恢复
+│   │   ├── AgentApi.kt        # 任务HTTP/SSE协议及只读连接获取
 │   │   ├── AgentModels.kt     # 会话/工具协议、批次进度与摘要状态
-│   │   ├── AgentSession.kt    # 应用级对话状态、发送/取消/新建与持久化
+│   │   ├── AgentSession.kt    # 界面使用的对话门面
+│   │   ├── AgentConversationController.kt # 应用级操作、发送/取消/新建与状态
+│   │   ├── AgentRunFollower.kt # 在当前操作作用域内跟随SSE、执行工具和回传
+│   │   ├── AgentConversationRecords.kt # 会话历史与待同步意图的持久化入口
+│   │   ├── AgentUiState.kt / AgentPresentation.kt # 会话状态与页面展示映射
 │   │   ├── AgentSuggestions.kt # 真实目录驱动的每会话随机建议
 │   │   ├── AgentTools.kt      # 会话调用工具的统一入口，组装执行器与处理器
 │   │   ├── AgentToolExecutor.kt # 领取、执行标记、去重、取消及未提交回执恢复
@@ -235,25 +239,28 @@ agent-server/              # 一个 Python 服务进程，按职责组织为包
 ├── requirements.txt       # 运行依赖版本锁定
 └── maoer_agent/
     ├── __main__.py / cli.py # 服务启动与终端客户端实现
-    ├── api/                # FastAPI 应用、任务路由、HTTP 协议
-    │   ├── app.py
-    │   ├── routes.py
-    │   └── protocol.py
-    ├── agent/              # LangGraph 编排、生命周期、上下文和选集策略
-    │   ├── graph.py / tasks.py / state.py
-    │   ├── memory.py / prompts.py / summary.py / selection.py
-    │   └── episode_pages.py # 独立分集网页查询目标、步骤和结果
-    ├── model/              # 模型适配、输入预算、准入和上游通信
-    │   ├── client.py / context.py / gate.py
+    ├── api/                # 入站请求、任务路由及显式公开响应
+    │   └── app.py / routes.py / protocol.py / responses.py / transport.py
+    ├── application/        # 依赖装配、来源查询及固定结果呈现
+    │   └── bootstrap.py / sources.py / replies.py
+    ├── contracts/          # 中立的消息、工具、意图、执行上下文与错误契约
+    ├── agent/              # LangGraph执行与任务生命周期
+    │   └── graph.py / tasks.py / state.py
+    ├── runtime/dispatch.py # 设备批次、领取、回执与推进决定
+    ├── workflows/          # 意图路由、工具范围、选集与独立网页流程
+    │   └── intent.py / planning.py / selection.py / episode_pages.py
+    ├── context/            # 模型输入组装、提示、引用视图与输入预算
+    │   └── assembler.py / prompts.py / route.py / budget.py
+    ├── memory/             # 近期对话、候选引用及滚动摘要
+    │   └── history.py / summary.py
+    ├── model/              # 生成/向量适配、准入与上游通信
+    │   ├── client.py / provider.py / embeddings.py / gate.py
     │   └── rate_limit.py / transport.py / failures.py
-    ├── tools/              # 统一工具定义、手机派发和实际回执校验
-    │   └── definitions.py / dispatch.py / results.py
-    ├── research/           # RSS 与网页资料，不持有手机播放器
-    │   ├── policy.py / rss.py / updates.py / sources.py / store.py
-    │   ├── tools.py        # 资料工具入口、来源映射和正文节选
-    │   └── web.py          # Tavily 通信、持久额度、冷却及用量监测
-    ├── storage/
-    │   └── tasks.py        # 任务、摘要、删除标记和公开快照
+    ├── tools/              # 工具定义与实际回执校验
+    │   └── definitions.py / results.py
+    ├── research/           # RSS、网页、证据及公共资料存储
+    │   └── rss.py / updates.py / sources.py / store.py / tools.py / web.py
+    ├── storage/tasks.py    # 任务、摘要和删除标记持久化
     ├── core/
     │   └── config.py / errors.py / limits.py # 配置、文案与调用上限
     └── resources/
@@ -282,27 +289,26 @@ agent-server/              # 一个 Python 服务进程，按职责组织为包
 
 | 模块 | 具体职责与边界 |
 | --- | --- |
-| `main.py` / `core/config.py` | 读取 `.local/agent.env` 中的 OpenAI-compatible Base URL、模型和 API Key，创建或读取独立的客户端访问令牌，再启动 Uvicorn。上游 Key 留在服务端，客户端不能覆盖模型配置。 |
-| `api/app.py` / `api/protocol.py` | 创建 FastAPI 应用，在生命周期内打开、关闭共享 HTTPX 客户端和任务服务；校验访问令牌、请求大小、消息角色及工具结果配对，提供 `/v1/chat/completions` 网关，并过滤对外响应字段。 |
-| `api/routes.py` | 提供任务创建、查询、取消、重试及会话删除接口；通过 SSE 返回带版本号的完整任务快照，接收 Android 的工具领取和执行结果。SSE 包含逐步增长的回复文字，但不是原样转发上游 Token 事件。 |
-| `agent/tasks.py` | 协调任务创建、后台运行、取消、重试、会话删除与服务重启恢复；通过存储、图和工具派发模块完成流程，不直接执行 SQL。 |
-| `agent/graph.py` / `agent/state.py` | 保持 `prepare`、`model`、`research`、`device` 四个节点及原检查点字段；负责摘要准备、模型有限重试、每任务 36 次工具预算及收尾回答，在设备节点中断等待真实回执。 |
-| `storage/tasks.py` | 持久化任务、摘要与删除标记；统一任务查询、更新及对外快照字段过滤，继续使用原 SQLite 表和两个数据库文件。 |
-| `tools/dispatch.py` | 接收最多 12 项的批次，每次向手机派发一项；保存领取与执行回执、去重，控制失败后跳过后续控制但允许独立读取，接收取消后迟到回执。 |
-| `agent/selection.py` | 根据真实工具证据判断选集是否需要确认及是否需要先刷新；返回结构化候选与条件，确认文案仍由模型生成。 |
-| `agent/prompts.py` | 集中基础提示、客户端选集能力和模型配置、当前请求状态、预算耗尽提示；与工具参数定义分离。 |
-| `agent/episode_pages.py` | 将单独的分集网页查询推进为已有资料检查、搜索、候选页读取与身份核对；按真实结果生成链接、未找到或失败的答复。复合请求继续交给通用 Agent 处理。 |
-| `agent/memory.py` | 从已结束任务提取有预算的交流，保留失败、取消轮的用户要求及已有回执，从成功工具回执构建候选引用和历史播放对象；引用参与真实 ID 校验，与任务及检查点一起持久化、删除。记忆仅在服务端组装模型输入时附加，不作为额外字段传给 Android。 |
-| `agent/summary.py` | 限制待整理资料、构造摘要提示、校验四组结构化摘要的格式与长度；将摘要标为低信任背景，提示最新要求优先、缺失时澄清，不能作为工具 ID 或实时状态证据。原始 RSS 长文和内部 ID 不写入整理资料的工具记录。 |
-| `model/client.py` | 调用模型并解析 SSE，将文字增量发布给任务状态；组装完整的工具名称、调用 ID 和 JSON 参数，再交给任务层校验，避免执行尚未接收完整的工具请求。 |
-| `tools/definitions.py` | 集中登记 13 项手机工具与 5 项服务端研究工具的参数、执行位置、能力要求和结果类型，派生工具白名单。支持语义检索的客户端使用服务端 RSS 检索和网页资料工具；旧客户端继续使用原有 RSS 节选检索。 |
-| `tools/results.py` | 校验实际回执中的结果类型、目标身份与播放器观察值；原始回执、幂等指纹和资料标注分别保存。不完整或矛盾的成功回执转为不确定，防止误报操作完成。 |
-| `model/context.py` | 只整理发给模型的输入副本；按完整旧轮次移出历史，必要时缩减已消费且可补读的网页片段，保留原始执行记录、调用配对、身份、顺序和思考续传字段。 |
-| `model/transport.py` / `model/gate.py` | 独立于 Web 入口提供有界 HTTP/SSE 读取和请求准入；模型适配器显式接收共享 HTTPX 客户端与 Gate，不反向导入 `app.py`。 |
-| `model/rate_limit.py` | 解析通用 429 错误和 `Retry-After`，计算共享冷却时间；模型节点据此安排有限重试。额度错误及未知 429 不盲目重试，文件中已无智谱专用错误码逻辑。 |
-| `research/tools.py` / `research/web.py` | 工具入口负责RSS/网页分派、URL许可和结果映射；独立网页客户端负责固定成本请求、持久免费额度、防重复计费、429冷却与后台用量监测。共用原资料库，关闭时先停止用量任务，再关闭RSS与存储。 |
-| `core/` / `resources/` | 配置定位到项目根目录下的 `.local`，配置、令牌、数据库和向量模型使用固定路径。固定JSON通过Python包资源读取；Android生成错误文案使用同一份JSON。 |
-| `start.ps1` / `start.sh` | 管理当前用户目录下的启动、日志和进程；Linux 脚本复用已有 Python/Conda 环境并使用进程锁。当前脚本不提供开机自启或崩溃自动拉起。 |
+| `main.py` / `core/config.py` | 读取服务端配置并启动Uvicorn；供应商密钥和客户端访问令牌保存在服务端。 |
+| `contracts/` | 消息、工具、意图、研究执行上下文及共享错误契约；不依赖API或具体任务流程。公共聊天请求与内部Agent请求各自保留字段限制。 |
+| `api/app.py` / `protocol.py` / `transport.py` | 公共聊天网关、入站校验、调用方断连和公开响应过滤；供应商请求转换与HTTP调用交给模型适配器。 |
+| `api/routes.py` / `responses.py` | 任务创建、查询、取消、重试、会话删除、领取及回执接口；HTTP与SSE共用显式字段投影，保留字段缺失含义，不自动公开新内部字段。 |
+| `application/bootstrap.py` | 创建HTTP之外的模型、知识、存储与任务依赖，管理后台索引、任务恢复和关闭顺序。任务服务接收已创建依赖。 |
+| `application/sources.py` / `replies.py` | 根据任务绑定的来源编号查询已保存正文或节选；固定网页查询结果的链接、文字和引用呈现。查看保存的正文不触发新的联网查询。 |
+| `agent/tasks.py` / `graph.py` / `state.py` | 任务生命周期、有限重试与调用预算；保留prepare/model/research/device节点和检查点字段。图调用上下文、流程和工具服务，设备执行等待真实回执。 |
+| `runtime/dispatch.py` | 单批最多12项，逐项派发、保存领取和回执、去重及批次推进；返回恢复决定，由任务运行器统一启动LangGraph恢复。取消后迟到回执可保存但不继续派发。 |
+| `workflows/` | 意图分类与工具范围、真实身份与选集确认、播放前刷新、独立分集网页的检查/搜索/读取/身份核对。返回流程决定，不持有播放器或创建知识存储。 |
+| `context/assembler.py` / `budget.py` | 统一组装主回答与引用修正输入，结合记忆、摘要、本轮证据、实际工具与预算；只处理输入副本，不写任务、执行工具或联网。 |
+| `context/prompts.py` / `route.py` | 基础提示、能力说明及当前意图的模型输入表达，与工具定义和执行策略分离。 |
+| `memory/history.py` / `summary.py` | 近期完整交流、带来源的候选引用和滚动摘要；保留失败/取消轮真实结果，摘要不作为可执行ID或实时播放器状态。 |
+| `model/client.py` / `provider.py` | 公共网关与Agent共享供应商请求转换、出站HTTP和上游错误分类；Agent保留流式文字、完整工具参数及内部推理续传。 |
+| `model/embeddings.py` | 本地BGE加载、并发及文档/查询向量生成，向知识层提供向量接口和索引身份；RSS层决定切块、筛选、排序和缓存。 |
+| `model/transport.py` / `gate.py` / `rate_limit.py` | 有界上游读取与SSE解析、并发准入、429及Retry-After共享冷却；任务节点据此安排有限重试。 |
+| `tools/definitions.py` / `results.py` | 13项手机工具和5项服务端工具的参数、位置、能力与结果规范；校验实际观察，原始回执及指纹独立保留。 |
+| `research/` | RSS解析、语义/词法检索、按日期查询、正文和来源管理；研究工具接收明确请求身份与来源快照。网页接入继续管理免费额度、去重、冷却和用量。 |
+| `storage/tasks.py` | 保存任务、摘要与删除标记，沿用任务库与独立检查点库；对外字段由API协议层决定。 |
+| `core/` / `resources/` | 根目录配置定位、错误文案、调用上限、URL分类及固定目录资源；Android共享同一错误目录。 |
+| `start.ps1` / `start.sh` | 用户目录下的进程管理；Linux复用已有Python/Conda及进程锁。 |
 
 一次“播放岩中花述最新一期”的请求，会按下面的路径查询真实节目和分集，再控制手机播放器：
 
@@ -323,14 +329,14 @@ flowchart TD
     H -->|SSE 快照中的待执行工具| A
     A -->|领取工具并调用真实业务| I[Android 目录 / RSS / 播放器]
     I -->|真实执行回执| J[api/routes：提交结果]
-    J --> K[tools/dispatch：保存回执并恢复任务]
+    J --> K[runtime/dispatch：保存回执，任务运行器恢复图]
     K --> C
     F -->|SSE 任务快照| A
 ```
 
-LangGraph 每轮可接收最多 8 个工具，服务端每次向手机派发一个；搜索节目、查询分集和开始播放可以跨多轮完成。`device` 节点等待手机回执时保存检查点，收到结果后把它加入工具消息并恢复 `model` 节点。模型回复中的“已播放”必须有手机执行结果支撑，服务端本身不持有播放器。
+LangGraph 每轮可接收最多 12 个工具，服务端每次向手机派发一个；搜索节目、查询分集和开始播放可以跨多轮完成。`device` 节点等待手机回执时保存检查点，收到结果后把它加入工具消息并恢复 `model` 节点。模型回复中的“已播放”必须有手机执行结果支撑，服务端本身不持有播放器。
 
-研究工具在独立的 `research` 节点执行，执行前同步保存工具计划，逐项保存已开始标记和实际结果。恢复同一计划时复用已保存结果；若查询已开始但结果未落盘，会如实返回“结果不确定”，不自动重发可能消耗额度的请求。这是保守恢复策略，不承诺外部服务恰好执行一次。混合批次仍先完成服务端研究，再按顺序执行手机工具；需要前一步结果作为参数的调用应分轮进行。
+研究工具在独立的 `research` 节点执行，执行前同步保存工具计划，逐项保存已开始标记和实际结果。恢复同一计划时复用已保存结果；若查询已开始但结果未落盘，会如实返回“结果不确定”，不自动重发可能消耗额度的请求。混合批次仍先完成服务端研究，再按顺序执行手机工具；需要前一步结果作为参数的调用应分轮进行。
 
 系统提示按本次实际提供的工具组装，避免新旧能力说明互相矛盾。收尾核对对照用户要求，列出工具结果和未完成项；模型据此给出简洁回答。
 

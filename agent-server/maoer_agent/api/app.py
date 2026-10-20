@@ -14,10 +14,12 @@ from pydantic import ValidationError
 
 from maoer_agent.core.config import ROOT, Settings
 from maoer_agent.api.protocol import ChatRequest, public_response
-from maoer_agent.model.rate_limit import Throttle, upstream_failure_code
+from maoer_agent.model.rate_limit import Throttle
 from maoer_agent.model.gate import Gate
 from maoer_agent.model.failures import timeout_kind
-from maoer_agent.model.transport import MAX_BODY, TOTAL_TIMEOUT, read_request, connected_operation, limited_upstream, sse_data
+from maoer_agent.api.transport import read_request, connected_operation
+from maoer_agent.model.transport import TOTAL_TIMEOUT, limited_upstream, sse_data
+from maoer_agent.model.provider import request_body, open_response, response_failure
 
 LOG = logging.getLogger('maoer.agent')
 
@@ -39,9 +41,10 @@ def create_app(settings: Settings, transport=None, agent_db=None):
             trust_env=False, transport=transport,
         ) as client:
             app.state.client = client
-            from maoer_agent.agent.tasks import task_service
-            async with task_service(app, settings, agent_db or ROOT / '.local/agent-tasks.sqlite3') as tasks:
+            from maoer_agent.application.bootstrap import task_service
+            async with task_service(settings, client, app.state.gate, agent_db or ROOT / '.local/agent-tasks.sqlite3') as (tasks, sources):
                 app.state.agent = tasks
+                app.state.source_queries = sources
                 yield
 
     app = FastAPI(title='Maoer Local Agent', docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
@@ -69,7 +72,7 @@ def create_app(settings: Settings, transport=None, agent_db=None):
         try:
             body = await asyncio.wait_for(read_request(request), 10)
             payload = ChatRequest.model_validate(json.loads(body))
-            upstream_body = payload.upstream_body(settings)
+            upstream_body = request_body(payload, settings)
         except OverflowError:
             return error(413, 'body_too_large', request_id)
         except asyncio.TimeoutError:
@@ -88,21 +91,10 @@ def create_app(settings: Settings, transport=None, agent_db=None):
 
         async def upstream():
             nonlocal response
-            req = app.state.client.build_request('POST', settings.endpoint,
-                headers={'Authorization': 'Bearer ' + settings.api_key}, json=upstream_body)
-            response = await app.state.client.send(req, stream=True)
-            if response.status_code == 429:
-                try:
-                    data = await limited_upstream(response, limit=16384)
-                except (ValueError, UnicodeError, httpx.HTTPError):
-                    data = {}
-                return gate.limiter.record(data, response.headers.get('Retry-After'))
-            if response.status_code != 200:
-                try:
-                    data = await limited_upstream(response, limit=16384)
-                except (ValueError, UnicodeError, httpx.HTTPError):
-                    data = {}
-                return upstream_failure_code(response.status_code, data)
+            response = await open_response(app.state.client, settings, upstream_body)
+            failure = await response_failure(response, gate)
+            if failure:
+                return failure
             if payload.stream:
                 return None
             return public_response(await limited_upstream(response))

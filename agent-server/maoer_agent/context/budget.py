@@ -1,7 +1,7 @@
 """Bounded model view. Never mutate execution evidence or provider reasoning chains."""
 from copy import deepcopy
 import json
-from maoer_agent.model.client import ModelFailure
+from maoer_agent.contracts.errors import ModelFailure
 from maoer_agent.core.limits import MAX_AGENT_MESSAGES
 
 

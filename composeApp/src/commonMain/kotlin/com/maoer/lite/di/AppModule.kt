@@ -49,9 +49,10 @@ val appModule = module {
     // 全局播放器状态管理器：跨页面共享（首页底栏/详情页共用）。
     single { PlayerManager(get(), get(), get(), get(), get()) }
     single { AgentStorage() }
-    single { AgentApi(get()) }
+    single { AgentApi(get<AgentStorage>()::connection) }
     single { AgentTools(get(), get(), get(), get(), get(), get()) }
-    single { AgentSession(get(), get(), get()) }
+    single { AgentConversationController(get(), get(), get()) }
+    single { AgentSession(get()) }
     
     // ScreenModel (ViewModel)
     factory { HomeViewModel(get()) }

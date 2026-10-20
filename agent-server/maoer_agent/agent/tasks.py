@@ -1,42 +1,29 @@
 """Durable single-agent runs. Device operations happen only on Android."""
 import asyncio
-from contextlib import asynccontextmanager
-from functools import partial
 import logging
-from pathlib import Path
 import time
 import sqlite3
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.types import Command
 from langsmith import tracing_context
-from maoer_agent.model.client import ModelFailure, generate
-from maoer_agent.agent.prompts import SYSTEM, selection_policy
-from maoer_agent.agent.memory import context, last_turn
+from maoer_agent.contracts.errors import ModelFailure
+from maoer_agent.context.prompts import SYSTEM, selection_policy
+from maoer_agent.memory.history import context, last_turn
 from maoer_agent.agent.graph import AgentGraph
 from maoer_agent.tools.results import outcome_facts
-from maoer_agent.storage.tasks import Store
-from maoer_agent.agent.state import State, TaskConflict, TERMINAL, MAX_TOOL_CALLS, MAX_MODEL_ROUNDS, READ_ONLY
+from maoer_agent.agent.state import TaskConflict, TERMINAL
 from maoer_agent.core.limits import GRAPH_RECURSION_LIMIT
-from maoer_agent.tools.dispatch import ToolDispatcher
-from maoer_agent.agent.selection import selection_identity_refresh, playback_preflight, episode_selection_question
+from maoer_agent.runtime.dispatch import ToolDispatcher
 
 
 class AgentTasks:
-    def __init__(self, app, settings, saver, store, model=None):
+    def __init__(self, settings, saver, store, model, research, catalog, page_renderer):
         self.settings, self.store = settings, store
         self.saver = saver
         self.deletion_lock = asyncio.Lock()
-        # Preserve the injectable model's existing signature for callers/tests.
-        if model is None:
-            self.model = partial(generate, client=app.state.client, gate=app.state.gate)
-        else:
-            self.model = partial(model, app)
+        self.model = model
         self.jobs = {}
-        self.dispatcher = ToolDispatcher(store, self.get_run, self.jobs, self.launch)
-        from maoer_agent.research.tools import ResearchTools
-        self.research = ResearchTools(settings, app.state.client, store.path.parent / 'research.sqlite3')
-        self.research.rss.start()
-        self.graph = AgentGraph(settings, store, self.model, self.get_run, self.research).compile(saver)
+        self.dispatcher = ToolDispatcher(store, self.get_run)
+        self.graph = AgentGraph(settings, store, model, self.get_run, research, catalog, page_renderer).compile(saver)
 
     def launch(self, run_id, value):
         if run_id in self.jobs: raise TaskConflict('task_busy')
@@ -111,7 +98,10 @@ class AgentTasks:
         return self.dispatcher.claim(run_id, call_id)
 
     def submit(self, run_id, results):
-        return self.dispatcher.submit(run_id, results)
+        result = self.dispatcher.submit(run_id, results, busy=run_id in self.jobs)
+        if result.resume is not None:
+            self.launch(run_id, Command(resume=result.resume))
+        return result.run
 
     async def cancel(self, run_id):
         run = self.get_run(run_id)
@@ -193,20 +183,3 @@ class AgentTasks:
         jobs = list(self.jobs.values())
         for job in jobs: job.cancel()
         await asyncio.gather(*jobs, return_exceptions=True)
-        await self.research.close()
-
-
-@asynccontextmanager
-async def task_service(app, settings, path):
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    store = Store(path)
-    try:
-        # A synchronous snapshot write must never block the event loop waiting
-        # for an async checkpointer transaction in the same SQLite database.
-        async with AsyncSqliteSaver.from_conn_string(str(path) + '.checkpoints') as saver:
-            tasks = AgentTasks(app, settings, saver, store)
-            await tasks.recover()
-            try: yield tasks
-            finally: await tasks.close()
-    finally:
-        store.close()

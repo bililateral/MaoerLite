@@ -3,7 +3,7 @@ import json
 from dataclasses import dataclass
 from typing import Literal
 from pydantic import Field, field_validator, model_validator
-from maoer_agent.api.protocol import StrictModel, ToolCall
+from maoer_agent.contracts.chat import StrictModel, ToolCall
 from maoer_agent.core.limits import MAX_BATCH_CALLS, MAX_TOOL_DEFINITIONS
 
 

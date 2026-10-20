@@ -7,6 +7,36 @@ import kotlinx.serialization.json.jsonPrimitive
 internal fun latestAgentItem(turns: Int, hasAnswer: Boolean): Int =
     ((turns - 1).coerceAtLeast(0) * 2) + if (turns > 0 && hasAnswer) 1 else 0
 
+internal enum class AgentAction { Delete, Stop, Recover, Retry, None }
+
+internal data class AgentScreenPresentation(val pending: Boolean, val statusText: String, val action: AgentAction)
+
+/** Maps application state to presentation; execution admission stays in the controller. */
+internal fun agentScreenPresentation(state: AgentUiState): AgentScreenPresentation {
+    val last = state.history.turns.lastOrNull()?.run
+    val pending = state.history.deletePending || state.history.turns.lastOrNull()?.let { it.run?.terminal != true } == true || state.history.cancelPending != null
+    val text = when {
+        state.history.deletePending -> if (state.working) "正在删除旧对话…" else "旧对话删除待确认"
+        state.history.cancelPending != null -> "停止请求待同步"
+        last?.status == "retry_wait" -> "${agentError(last.error)}，等待 ${last.retry_after} 秒后重试"
+        last?.status == "summarizing" -> "正在整理较早对话…"
+        last?.status == "awaiting_tools" -> agentWorkLabel(last)
+        state.working -> agentWorkLabel(last)
+        last?.status == "failed" -> agentError(last)
+        last?.status == "cancelled" -> "已停止；已执行的操作保持实际状态"
+        !state.connected -> "请通过右上角设置连接服务"
+        else -> ""
+    }
+    val action = when {
+        state.history.deletePending -> if (state.working) AgentAction.None else AgentAction.Delete
+        state.working -> AgentAction.Stop
+        pending || (last?.status == "failed" && last.error != "tool_round_limit") ->
+            if (last?.status == "failed") AgentAction.Retry else AgentAction.Recover
+        else -> AgentAction.None
+    }
+    return AgentScreenPresentation(pending, text, action)
+}
+
 internal fun agentWorkLabel(run: AgentRun?): String {
     if (run?.status == "awaiting_tools") {
         val call = run.calls.singleOrNull()

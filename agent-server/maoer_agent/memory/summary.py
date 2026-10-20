@@ -1,7 +1,7 @@
 """Bounded rolling summaries. Text is background, never authority for device IDs."""
 import json
 
-from maoer_agent.agent.memory import encoded, task_turn
+from maoer_agent.memory.history import encoded, task_turn
 
 MAX_SUMMARY_CHARS = 4000
 MAX_BATCH_TURNS = 8

@@ -7,10 +7,11 @@ import sqlite3
 from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import Field, ValidationError
-from maoer_agent.api.protocol import StrictModel
+from maoer_agent.contracts.chat import StrictModel
+from maoer_agent.api.responses import run_response
+from maoer_agent.application.sources import SourceNotFound
 from maoer_agent.agent.state import TaskConflict, TERMINAL
-from maoer_agent.storage.tasks import Store
-from maoer_agent.model.transport import read_request
+from maoer_agent.api.transport import read_request
 
 
 class NewRun(StrictModel):
@@ -41,7 +42,7 @@ def register(app, settings):
     async def storage_failure(request, exc):
         return JSONResponse({'error': {'code': 'server_storage_error'}}, 503)
 
-    def public(run): return Store.public(run)
+    public = run_response
 
     @app.post('/v1/agent/runs')
     async def create(request: Request):
@@ -65,13 +66,14 @@ def register(app, settings):
 
     @app.get('/v1/agent/runs/{run_id}/sources/{number}')
     async def source_text(run_id: str, number: int, request: Request):
-        run = await lookup(run_id, request)
-        if isinstance(run, JSONResponse): return run
-        source = next((s for s in run.get('sources', []) if s['number'] == number), None)
-        if source is None: return JSONResponse({'error': {'code': 'source_not_found'}}, 404)
-        text = app.state.agent.research.store.read(source.get('document_id', ''))
-        return {'text': text or source.get('evidence', ''), 'complete': bool(text) and not source.get('description_truncated', False),
-                'source_url': source.get('original_url') or source.get('source_url', '')}
+        refusal = await authorized(request)
+        if refusal: return refusal
+        try:
+            return app.state.source_queries.text(run_id, number)
+        except KeyError:
+            return JSONResponse({'error': {'code': 'run_not_found'}}, 404)
+        except SourceNotFound:
+            return JSONResponse({'error': {'code': 'source_not_found'}}, 404)
 
     @app.delete('/v1/agent/conversations/{conversation_id}')
     async def delete_conversation(conversation_id: str, request: Request):

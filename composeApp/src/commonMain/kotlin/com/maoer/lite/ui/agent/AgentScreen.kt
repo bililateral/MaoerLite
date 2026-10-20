@@ -64,7 +64,8 @@ object AgentScreen : Screen {
                         (list.firstVisibleItemIndex == replyIndex && list.firstVisibleItemScrollOffset > jumpThreshold))
             }
         }
-        val pending = state.history.deletePending || state.history.turns.lastOrNull()?.let { it.run?.terminal != true } == true || state.history.cancelPending != null
+        val presentation = agentScreenPresentation(state)
+        val pending = presentation.pending
         LaunchedEffect(state.ready) {
             if (state.ready && state.connected && pending && !state.working) session.reconnect()
         }
@@ -106,23 +107,12 @@ object AgentScreen : Screen {
                         color = Color(0xFF756D65), fontSize = 12.sp)
                 }
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(when {
-                        state.history.deletePending -> if (state.working) "正在删除旧对话…" else "旧对话删除待确认"
-                        state.history.cancelPending != null -> "停止请求待同步"
-                        last?.status == "retry_wait" -> "${agentError(last.error)}，等待 ${last.retry_after} 秒后重试"
-                        last?.status == "summarizing" -> "正在整理较早对话…"
-                        last?.status == "awaiting_tools" -> agentWorkLabel(last)
-                        state.working -> agentWorkLabel(last)
-                        last?.status == "failed" -> agentError(last)
-                        last?.status == "cancelled" -> "已停止；已执行的操作保持实际状态"
-                        !state.connected -> "请通过右上角设置连接服务"
-                        else -> ""
-                    }, Modifier.weight(1f), fontSize = 12.sp, color = Color(0xFF756D65))
+                    Text(presentation.statusText, Modifier.weight(1f), fontSize = 12.sp, color = Color(0xFF756D65))
                     if (state.history.deletePending) {
                         if (!state.working) TextButton(onClick = { session.reconnect() }) { Text("重试删除", color = accent) }
                     }
-                    else if (state.working) TextButton(onClick = session::stop) { Text("停止", color = accent) }
-                    else if (pending || (last?.status == "failed" && last.error != "tool_round_limit")) TextButton(onClick = { session.reconnect(retry = last?.status == "failed") }) {
+                    else if (presentation.action == AgentAction.Stop) TextButton(onClick = session::stop) { Text("停止", color = accent) }
+                    else if (presentation.action in listOf(AgentAction.Recover, AgentAction.Retry)) TextButton(onClick = { session.reconnect(retry = last?.status == "failed") }) {
                         Text(if (last?.status == "failed") "重试当前步骤" else "恢复连接", color = accent)
                     }
                     else if (showAnswerStart) TextButton(onClick = {

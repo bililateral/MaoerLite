@@ -447,6 +447,8 @@ AGENT_API_KEY=你的中转站密钥
 
 在这两个已适配的接口间切换，只需注释原来的三项，启用并填写另一组，每个变量只保留一条生效值，然后重启对应 Python 服务；不需要改 Android 或业务代码。手机通过 App SSH 使用远端时，应修改服务器 `~/maoer-agent/.local/agent.env`，仅修改电脑文件不会自动同步。保持监听地址、端口和 `.local/agent-server.token` 不变，手机连接设置也无需变化。
 
+服务器的共享透明代理导致模型连接失败时，可在远端 `.local/agent.env` 同时设置 `AGENT_MODEL_SOURCE_IPV4`（服务器已有的物理网卡 IPv4）和 `AGENT_MODEL_DNS_IPV4`（经该地址可达的 DNS 服务器 IPv4），仅为模型端点启用独立出站连接。DNS 查询和模型 TCP 连接均绑定该源地址，按 DNS 返回的有效期缓存 IPv4；请求仍保留原域名的 Host、TLS SNI 和证书校验，不固定模型公网 IP。该选项依赖服务器现有路由允许此源地址正常出站，不修改系统 DNS、路由或共享代理，其他 RSS、网页检索请求仍使用原连接方式。两项不配置时保持默认网络行为；修改后仅重启本项目服务。
+
 新版联网与向量检索还需要两项本机准备：
 
 - 在Git忽略的`.local/research.env`填写`TAVILY_API_KEY=你的Tavily免费密钥`和`WEB_MONTHLY_LIMIT=950`。部署端保留此运行配置，SSH临时密码文件不用于应用运行。

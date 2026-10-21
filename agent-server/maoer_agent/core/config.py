@@ -26,6 +26,8 @@ class Settings:
     tavily_key: str = field(default='', repr=False)
     web_monthly_limit: int = 950
     context_budget_bytes: int = 240000
+    model_source_ipv4: str = ''
+    model_dns_ipv4: str = ''
 
     @property
     def endpoint(self):
@@ -62,6 +64,14 @@ def load_settings(path: Path = ROOT / '.local/agent.env') -> Settings:
         raise ValueError('Invalid model service base URL')
     if not model or len(model) > 128 or not model.isascii() or any(c.isspace() for c in model):
         raise ValueError('Invalid model name')
+    source_ipv4 = values.get('AGENT_MODEL_SOURCE_IPV4', '')
+    dns_ipv4 = values.get('AGENT_MODEL_DNS_IPV4', '')
+    if bool(source_ipv4) != bool(dns_ipv4):
+        raise ValueError('Model source and DNS IPv4 must be configured together')
+    for address in (source_ipv4, dns_ipv4):
+        if address and (ip_address(address).version != 4 or ip_address(address).is_unspecified
+                        or ip_address(address).is_multicast):
+            raise ValueError('Invalid model network IPv4 address')
     budget = int(values.get('AGENT_CONTEXT_BUDGET_BYTES', '240000'))
     if not 64000 <= budget <= 4000000:
         raise ValueError('Invalid AGENT_CONTEXT_BUDGET_BYTES')
@@ -89,4 +99,5 @@ def load_settings(path: Path = ROOT / '.local/agent.env') -> Settings:
     return Settings(api_key=key, access_token=token, port=port, base_url=base_url, model=model, host=host,
                     agent_thinking=thinking == 'enabled', reasoning_effort=effort,
                     context_budget_bytes=budget, model_requests_per_minute=model_rpm, tavily_key=values.get('TAVILY_API_KEY', ''),
+                    model_source_ipv4=source_ipv4, model_dns_ipv4=dns_ipv4,
                     web_monthly_limit=min(950, max(0, int(values.get('WEB_MONTHLY_LIMIT', '950')))))

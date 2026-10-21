@@ -20,6 +20,7 @@ from maoer_agent.model.failures import timeout_kind
 from maoer_agent.api.transport import read_request, connected_operation
 from maoer_agent.model.transport import TOTAL_TIMEOUT, limited_upstream, sse_data
 from maoer_agent.model.provider import request_body, open_response, response_failure
+from maoer_agent.model.network import model_transport
 
 LOG = logging.getLogger('maoer.agent')
 
@@ -38,7 +39,7 @@ def create_app(settings: Settings, transport=None, agent_db=None):
     async def lifespan(app):
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(30, connect=15), follow_redirects=False,
-            trust_env=False, transport=transport,
+            trust_env=False, transport=transport if transport is not None else model_transport(settings),
         ) as client:
             app.state.client = client
             from maoer_agent.application.bootstrap import task_service

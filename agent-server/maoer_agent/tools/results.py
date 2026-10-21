@@ -4,6 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from maoer_agent.tools.definitions import TOOLS
 from maoer_agent.core.errors import error_message
+from maoer_agent.contracts.research import RSS_SEARCH_PAGE_SIZE
 
 
 class Item(BaseModel):
@@ -35,10 +36,15 @@ class Result(BaseModel):
     next_offset: int | None = Field(default=None, ge=-1)
 
 
+class RssSearchResult(Result):
+    items: list[Item] | None = Field(default=None, max_length=RSS_SEARCH_PAGE_SIZE)
+
+
 def checked_result(call, raw):
     """Accept legacy optional fields; a malformed success never authorizes more controls."""
     try:
-        parsed = Result.model_validate(raw)
+        result_type = RssSearchResult if call['name'] == 'search_rss' else Result
+        parsed = result_type.model_validate(raw)
         spec = TOOLS[call['name']]
         # Android list_episodes has always used -1 for the final page. This
         # sentinel is not a valid offset for a continuation or a text reader.
@@ -80,7 +86,7 @@ def checked_result(call, raw):
                             raise ValueError('wrong_podcast')
                     if call['name'] == 'read_episode_description' and item.id != call['arguments']['episode_id']:
                         raise ValueError('wrong_episode')
-                if parsed.has_more is True and call['name'] in ('list_episodes', 'read_web_page', 'read_episode_description', 'query_library', 'list_recent_updates'):
+                if parsed.has_more is True and call['name'] in ('search_rss', 'list_episodes', 'read_web_page', 'read_episode_description', 'query_library', 'list_recent_updates'):
                     if parsed.next_offset is None or parsed.next_offset <= call['arguments'].get('offset', 0):
                         raise ValueError('invalid_page')
         # Don't inject defaults or coerce legacy values. Raw JSON stays immutable.

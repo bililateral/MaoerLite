@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 from maoer_agent.model.embeddings import Embeddings
 from maoer_agent.research.store import digest
 from maoer_agent.core.errors import error_message
+from maoer_agent.contracts.research import RSS_SEARCH_PAGE_SIZE
 
 CATALOG = json.loads(files('maoer_agent.resources').joinpath('research_catalog.json').read_text(encoding='utf-8'))
 CONTENT = '{http://purl.org/rss/1.0/modules/content/}encoded'
@@ -137,7 +138,7 @@ class RssResearch:
                     pass  # Query response reports actual vector coverage.
             await asyncio.sleep(3600)
 
-    async def search(self, query, podcast_id='', required_terms=None, excluded_terms=None):
+    async def search(self, query, podcast_id='', required_terms=None, excluded_terms=None, offset=0):
         required_terms, excluded_terms = required_terms or [], excluded_terms or []
         sources = [s for s in CATALOG if not podcast_id or s['id'] == podcast_id]
         if not sources: return {'status': 'error', 'code': 'rss_podcast_missing', 'note': error_message('rss_podcast_missing')}
@@ -190,17 +191,20 @@ class RssResearch:
         for score, row, start, text in scored:
             if row['id'] in selected: continue
             selected.add(row['id'])
+            if len(selected) <= offset: continue
             # Short descriptions can be read completely within the result budget.
             if len(row['description']) <= 1000:
                 start, text = 0, row['description']
             item = self.evidence(row, text, start, timestamps.get(row['id'], 0))
             item['description_checks'] = checks[row['id']]
             items.append(item)
-            if len(items) == 6: break
+            if len(items) == RSS_SEARCH_PAGE_SIZE: break
         result = {'status': 'ok', 'items': items, 'failures': failures, 'coverage_available': sum(bool(r) for _, r in feeds),
                 'retrieval_scope': 'ranked_relevant_passages_not_exhaustive_findings',
                 'description_count': len(rows), 'matched_episodes': matched_episodes,
                 'returned': len(items), 'omitted': matched_episodes - len(items),
+                'offset': offset, 'has_more': offset + len(items) < matched_episodes,
+                'next_offset': offset + len(items),
                 'literal_filter': {'required_terms': required_terms, 'excluded_terms': excluded_terms,
                     'operator': 'all_required_and_none_excluded', 'term_counts': literal_counts,
                     'evaluated_descriptions': len(rows), 'eligible_descriptions': sum(c['passes'] for c in checks.values()),

@@ -3,7 +3,7 @@ import json
 from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from maoer_agent.core.limits import MAX_BATCH_CALLS, MAX_TOOL_DEFINITIONS
+from maoer_agent.core.limits import MAX_BATCH_CALLS, MAX_TOOL_DEFINITIONS, MAX_TOOL_MESSAGE_CHARS
 
 
 class StrictModel(BaseModel):
@@ -23,12 +23,14 @@ class ToolCall(StrictModel):
 
 class Message(StrictModel):
     role: Literal['system', 'user', 'assistant', 'tool']
-    content: str | None = Field(default=None, max_length=16000)
+    content: str | None = Field(default=None, max_length=MAX_TOOL_MESSAGE_CHARS)
     tool_calls: list[ToolCall] | None = Field(default=None, min_length=1, max_length=MAX_BATCH_CALLS)
     tool_call_id: str | None = Field(default=None, min_length=1, max_length=256)
 
     @model_validator(mode='after')
     def check_role(self):
+        if self.role != 'tool' and len(self.content or '') > 16000:
+            raise ValueError('Message content too long')
         if self.role != 'assistant' and self.content is None:
             raise ValueError('Message content required')
         if self.tool_calls is not None and self.role != 'assistant':

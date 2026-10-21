@@ -2,6 +2,7 @@
 from copy import deepcopy
 import json
 import re
+from maoer_agent.contracts.research import RSS_SEARCH_PAGE_SIZE
 
 MAX_TURNS = 20
 MAX_HISTORY_MESSAGES = 80  # Separate from the current task's tool budget.
@@ -119,7 +120,8 @@ def remember(memory, run_id, calls, results):
         elif name in ('search_catalog', 'list_episodes', 'get_podcast_details', 'search_rss', 'read_episode_description', 'list_recent_updates'):
             kind = 'podcast' if name in ('search_catalog', 'get_podcast_details') else 'episode'
             raw = result.get('items')
-            if not isinstance(raw, list) or not raw or len(raw) > 8:
+            limit = RSS_SEARCH_PAGE_SIZE if name == 'search_rss' else 8
+            if not isinstance(raw, list) or not raw or len(raw) > limit:
                 continue
             items = [clean_item(item, kind) for item in raw]
             # Reject a malformed group, never silently renumber its candidates.

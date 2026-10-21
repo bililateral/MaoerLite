@@ -2,7 +2,7 @@
 from copy import deepcopy
 import json
 from maoer_agent.contracts.errors import ModelFailure
-from maoer_agent.core.limits import MAX_AGENT_MESSAGES
+from maoer_agent.core.limits import MAX_AGENT_MESSAGES, MAX_TOOL_MESSAGE_CHARS
 
 
 def size(messages, tools, output_tokens):
@@ -45,7 +45,8 @@ def fit_context(messages, tools, limit=240000, output_tokens=4096):
     if removed:
         view.insert(1, {'role': 'system', 'content': '输入长度限制移出了部分旧轮次；序号指代需保留原列表及其展示顺序，缺少时向用户确认。用户最新要求优先。'})
     after = size(view, tools, output_tokens)
-    if after > limit or len(view) > MAX_AGENT_MESSAGES or any(len(m.get('content') or '') > 16000 for m in view):
+    if after > limit or len(view) > MAX_AGENT_MESSAGES or any(
+            len(m.get('content') or '') > (MAX_TOOL_MESSAGE_CHARS if m['role'] == 'tool' else 16000) for m in view):
         raise ModelFailure('context_budget_exhausted', details={'input_bytes': after, 'limit_bytes': limit})
     return view, {'before_bytes': before, 'after_bytes': after, 'limit_bytes': limit,
                   'removed_turns': removed, 'compacted_results': compacted, 'estimate': 'utf8_bytes_with_output_reserve'}

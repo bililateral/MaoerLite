@@ -25,15 +25,16 @@ from maoer_agent.core.limits import MAX_MODEL_ATTEMPTS
 from maoer_agent.workflows import episode_pages
 from maoer_agent.workflows.recommendations import criteria_call
 from maoer_agent.workflows.recovery import recovery_scope
+from maoer_agent.workflows.query_replies import reply_step, library_reply_step
 
 
 class AgentGraph:
-    def __init__(self, settings, store, model, get_run, research, catalog, page_renderer, selection_renderer):
+    def __init__(self, settings, store, model, get_run, research, catalog, page_renderer, query_renderer):
         self.settings, self.store, self.model, self.get_run = settings, store, model, get_run
         self.research = research
         self.catalog = catalog
         self.page_renderer = page_renderer
-        self.selection_renderer = selection_renderer
+        self.query_renderer = query_renderer
         self.context = ContextAssembler()
         self.feed_urls = frozenset(i['feed_url'] for i in catalog)
 
@@ -145,7 +146,8 @@ class AgentGraph:
         self.store.update(run_id, context_budget=metrics)
         started, waited = time.monotonic(), 0
         async def publish(text):
-            self.store.update(run_id, text=text, status='generating', retry_after=0)
+            if not state.get('route', {}).get('response_needs', {}).get('library_listing'):
+                self.store.update(run_id, text=text, status='generating', retry_after=0)
         for attempt in range(3):
             self.store.update(run_id, text='', status='generating', retry_after=0, error='', error_detail={},
                               phase='model_analysis' if state.get('tool_count', 0) else 'model_planning')
@@ -216,10 +218,14 @@ class AgentGraph:
         names = {d['function']['name'] for d in available}
         criteria = None if final_only else criteria_call(state.get('route', {}), state['messages'], names)
         selected = selection_step(state.get('route', {}), state['messages'], names) if state.get('extended_episodes') else None
+        direct = reply_step(state.get('route', {}), state['messages'], names)
         if self.get_run(run_id).get('playback_refresh_pending') and not final_only:
             message = {'role': 'assistant', 'content': None, 'tool_calls': [{
                 'id': 'recovery_state_' + run_id + '_' + str(state.get('tool_count', 0)),
                 'type': 'function', 'function': {'name': 'get_playback_state', 'arguments': '{}'}}]}
+            messages = state['messages']
+        elif direct:
+            message = {'role': 'assistant', 'content': self.query_renderer(direct)}
             messages = state['messages']
         elif criteria:
             message = {'role': 'assistant', 'content': None, 'tool_calls': [{
@@ -228,7 +234,7 @@ class AgentGraph:
             messages = state['messages']
         elif selected:
             if selected['kind'] == 'selection':
-                message = {'role': 'assistant', 'content': self.selection_renderer(selected)}
+                message = {'role': 'assistant', 'content': self.query_renderer(selected)}
             else:
                 message = {'role': 'assistant', 'content': None, 'tool_calls': [{
                     'id': 'selection_' + run_id + '_' + str(state.get('tool_count', 0)), 'type': 'function',
@@ -245,6 +251,10 @@ class AgentGraph:
             raise ModelFailure('invalid_tool_call') from None
         if final_only and calls:
             raise ModelFailure('tool_round_limit')
+        if not calls:
+            library = library_reply_step(state.get('route', {}), state['messages'])
+            if library:
+                message = {'role': 'assistant', 'content': self.query_renderer(library)}
         if not calls and state.get('research') and not valid_citations(message.get('content'), self.get_run(run_id).get('sources', [])):
             # Citation numbers belong to one answer. A model may accidentally
             # reuse a previous turn's number even when all tool work succeeded.

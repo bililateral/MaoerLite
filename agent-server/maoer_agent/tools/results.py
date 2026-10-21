@@ -6,6 +6,15 @@ from maoer_agent.tools.definitions import TOOLS
 from maoer_agent.core.errors import error_message
 from maoer_agent.contracts.research import RSS_SEARCH_PAGE_SIZE
 
+RSS_STATISTIC_FIELDS = {
+    'total_passages': '本次检索资料中的片段总数，重复文本窗口分别计数。',
+    'semantic_indexed_passages': '已有向量的片段数，重复文本窗口分别计数；与total_passages比较覆盖数。',
+    'semantic_unique_vectors': '已有向量的唯一键数量，相同标题及片段文本复用同一个向量键。',
+    'semantic_query_available': '本次查询向量是否可用，与已存片段向量覆盖数分别报告。',
+    'matched_episodes': '达到检索评分阈值的分集候选数。',
+    'returned': '本页返回的候选数，has_more和next_offset用于续页。',
+}
+
 
 class Item(BaseModel):
     model_config = ConfigDict(strict=True, extra='allow')
@@ -99,7 +108,7 @@ def checked_result(call, raw):
 
 def outcome_facts(messages):
     """Observed tool outcomes, not a claim to have inferred all user requirements."""
-    calls, observations = {}, []
+    calls, observations, library_pages = {}, [], {}
     for message in messages:
         for call in message.get('tool_calls') or []:
             calls[call['id']] = call['function']['name']
@@ -115,5 +124,31 @@ def outcome_facts(messages):
                 row['evidence'] = [{'id': i.get('id'), 'citation': i.get('citation'),
                                     'has_excerpt': bool(i.get('evidence')), 'kind': i.get('kind')}
                                    for i in result['items']]
+                if row['tool'] == 'query_library' and result.get('status') == 'ok':
+                    episodes = [i for i in result['items'] if i.get('kind') == 'episode']
+                    row['page_counts'] = {'tab': result.get('tab'), 'offset': result.get('offset', 0),
+                        'items': len(result['items']), 'episodes': len(episodes),
+                        'podcasts': sum(i.get('kind') == 'podcast' for i in result['items']),
+                        'favorite_episodes': sum(i.get('favorite') is True for i in episodes),
+                        'favorite_unknown': sum(type(i.get('favorite')) is not bool for i in episodes)}
+                    key = (result.get('tab'), result.get('favorite_kind', 'all'), result.get('query', ''))
+                    library_pages.setdefault(key, {})[result.get('offset', 0)] = result['items']
+                if row['tool'] == 'search_rss' and result.get('status') == 'ok':
+                    row['retrieval_counts'] = {'candidates': result.get('matched_episodes'),
+                        'returned': len(result['items']), 'offset': result.get('offset', 0)}
             observations.append(row)
-    return {'scope': 'observed_calls_only_not_user_goal_verdict', 'observations': observations}
+    totals = []
+    for (tab, favorite_kind, query), pages in library_pages.items():
+        unique = {(i['kind'], i['id']): i for _, items in sorted(pages.items()) for i in items}
+        episodes = [i for i in unique.values() if i['kind'] == 'episode']
+        programs = {}
+        for item in episodes:
+            name = item.get('podcast_title') or item['podcast_id']
+            programs[name] = programs.get(name, 0) + 1
+        totals.append({'tab': tab, 'favorite_kind': favorite_kind, 'query': query,
+            'observed_items': len(unique), 'observed_episodes': len(episodes),
+            'favorite_episodes': sum(i.get('favorite') is True for i in episodes),
+            'favorite_unknown': sum(type(i.get('favorite')) is not bool for i in episodes),
+            'episodes_by_podcast': programs})
+    return {'scope': 'observed_calls_only_not_user_goal_verdict', 'observations': observations,
+            **({'library_totals': totals} if totals else {})}

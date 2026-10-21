@@ -12,6 +12,21 @@ class ControlIntent(BaseModel):
     actions: list[ControlAction] = Field(default_factory=list, max_length=MAX_TOOL_CALLS)
 
 
+class ResponseNeeds(BaseModel):
+    model_config = ConfigDict(strict=True, extra='forbid')
+    app_guidance: bool = False
+    retrieval_statistics: bool = False
+    brief_episode_intro: bool = False
+    library_listing: bool = False
+    last_library_page: bool = False
+
+
+class UnsupportedRequest(BaseModel):
+    model_config = ConfigDict(strict=True, extra='forbid')
+    actions: list[Literal['add_favorite', 'remove_favorite', 'mark_completed', 'download', 'delete_download']] = Field(default_factory=list, max_length=MAX_TOOL_CALLS)
+    exclusive: bool = False
+
+
 class PageLookup(BaseModel):
     model_config = ConfigDict(strict=True, extra='forbid')
     requested: bool = False

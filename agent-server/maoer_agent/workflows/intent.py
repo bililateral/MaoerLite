@@ -4,7 +4,7 @@ from dataclasses import replace
 from maoer_agent.contracts.errors import ModelFailure
 
 from maoer_agent.tools.definitions import scoped_tools
-from maoer_agent.contracts.intent import PageLookup, EpisodeCriteria, ControlIntent
+from maoer_agent.contracts.intent import PageLookup, EpisodeCriteria, ControlIntent, ResponseNeeds, UnsupportedRequest
 from maoer_agent.context.route import conversation_view
 from maoer_agent.workflows.selection import normalize_selector
 
@@ -16,7 +16,9 @@ LIBRARY_TOOLS = scoped_tools('library')
 
 async def classify(model, settings, messages, catalog, disputed=()):
     choices = sorted({s['title'] for s in catalog} | {s['category'] for s in catalog})
-    prompt = '''你是对话意图路由器，只返回JSON对象，字段为podcast、web、device、library、network_allowed（布尔值）、hint（字符串）、page_lookup（对象）、episode_criteria（对象）、control_actions（字符串数组）。
+    prompt = '''你是对话意图路由器，只返回JSON对象，字段为podcast、web、device、library、network_allowed（布尔值）、hint（字符串）、page_lookup（对象）、episode_criteria（对象）、control_actions（字符串数组）、response_needs（对象）、unsupported_request（对象）。
+response_needs结构为{"app_guidance":false,"retrieval_statistics":false,"brief_episode_intro":false,"library_listing":false,"last_library_page":false}。用户询问如何手动操作App、界面入口或界面功能时app_guidance=true；请求助手执行操作、介绍节目内容或普通查询为false，不把未支持的操作请求自动改为手动教学。询问检索工具的统计、向量覆盖、技术原理或候选数量时retrieval_statistics=true；只要推荐、内容介绍和原文时为false。仅要求介绍某一分集时brief_episode_intro=true；另有音频内容核实、对比、推荐等要求时为false。只要求列出一个资料库页签的记录、收听位置、下载状态或收藏计数时library_listing=true；分页与说明收听位置属于该查询，另有播放、内容分析、分组筛选、其他统计或其他页签任务时为false；只问手动操作或功能用途也为false。仅要求该页签最后一页时last_library_page=true。
+unsupported_request结构为{"actions":[],"exclusive":false}。actions只记录用户本轮肯定要求执行的下列操作：add_favorite添加收藏、remove_favorite取消收藏、mark_completed标记听完、download下载分集、delete_download删除下载。只解释能力或手动操作方法、引用或否定这些动作时为空。仅要求这些操作且没有其他查询/播放/介绍等独立任务时exclusive=true。
 network_allowed表示本轮是否允许必要的联网查询；明确禁止联网、仅限本地或仅凭已有知识时为false，否则为true。
 page_lookup结构为{"requested":false,"target_kind":"none","selector_kind":"none","selector_value":0,"podcast_title":"","episode_title":"","query":"","other_tasks":[]}。target_kind按用户要交付的对象选择：episode_page=某集独立网页链接，podcast_homepage=节目主页链接，evidence_quote=资料中的原句/支持原文，episode_selection=目录中的分集定位，none=其他。仅前两类requested=true；原文句子不是原文网页链接。目录数值定位用episode_selection，selector_value填N：“第N集/倒数第N条”用reverse_source；“标题第N期/第N期”用title_number；“原始列表第N条”用source；明确按发布时间第N条用newest；其他不指定选择器。query填目标名称，名称取用户或已查询上下文；歧义时名称及query留空。other_tasks只列本目标之外的独立要求；读取、核对、返回目标内容均为必要步骤，不另列。
 episode_criteria结构为{"requested":false,"podcast_title":"","topic":"","max_duration_seconds":0,"preference":""}。仅本轮要求分集推荐/筛选时requested=true并填写；topic为内容主题，preference为轻松等内容偏好，时长上限换算为秒，未限定为0。追加条件保留用户仍有效的节目和主题，更新被改变的条件；内容偏好按语义理解，不等于字面包含词。其他请求使用空对象。
@@ -52,6 +54,8 @@ hint只从提供的节目名/分类中选择一个与用户实际话题相关的
         lookup['requested'] = lookup['target_kind'] in ('episode_page', 'podcast_homepage')
         criteria = EpisodeCriteria.model_validate(data.get('episode_criteria', {})).model_dump()
         controls = ControlIntent.model_validate({'actions': data.get('control_actions', [])}).actions
+        needs = ResponseNeeds.model_validate(data.get('response_needs', {})).model_dump()
+        unsupported = UnsupportedRequest.model_validate(data.get('unsupported_request', {})).model_dump()
         if lookup['requested'] and not lookup['query'].strip() and lookup['episode_title'].strip():
             lookup['query'] = ' '.join(n.strip() for n in (lookup['podcast_title'], lookup['episode_title']) if n.strip())[:300]
         lookup['exclusive'] = not (lookup['other_tasks'] or data['device'] or data.get('library', False))
@@ -74,6 +78,8 @@ hint只从提供的节目名/分类中选择一个与用户实际话题相关的
             'page_lookup': lookup,
             'episode_criteria': criteria,
             'control_actions': controls,
+            'response_needs': needs,
+            'unsupported_request': unsupported,
             'hint': data.get('hint', '') if data.get('hint', '') in choices else ''}
     except (ValueError, TypeError, AttributeError):
         raise ModelFailure('intent_unavailable') from None

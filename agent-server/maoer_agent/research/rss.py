@@ -221,6 +221,7 @@ class RssResearch:
         result = {'status': 'ok', 'items': items, 'failures': failures, 'coverage_available': sum(bool(r) for _, r in feeds),
                 'retrieval_scope': 'ranked_relevant_passages_not_exhaustive_findings',
                 'description_count': len(rows), 'matched_episodes': matched_episodes,
+                'match_count_kind': 'retrieval_candidates',
                 'returned': len(items), 'omitted': matched_episodes - len(items),
                 'offset': offset, 'has_more': offset + len(items) < matched_episodes,
                 'next_offset': offset + len(items),
@@ -231,9 +232,11 @@ class RssResearch:
                     'scope': 'stored_RSS_descriptions_only_not_audio_or_synonyms',
                     'conclusion_scope': 'term_counts记录指定字面词的出现次数；筛选结果按包含词和排除词组合计算。未指定词时不进行字面筛选。'},
                 'negative_claim_supported': False,
-                'coverage_total': len(sources), 'semantic_indexed_passages': len(vectors) if vector is not None else 0,
+                'coverage_total': len(sources),
+                'semantic_indexed_passages': sum(key in vectors for key, *_ in entries),
+                'semantic_unique_vectors': len(vectors), 'semantic_query_available': vector is not None,
                 'total_passages': len(entries), 'audio_analyzed': False,
-                'note': f'RSS可用源 {sum(bool(r) for _, r in feeds)}/{len(sources)}；相关候选 {matched_episodes} 条，返回 {len(items)} 条。检索对象为已存RSS说明；字面筛选结果见逐项检查字段。'}
+                'note': f'RSS可用源 {sum(bool(r) for _, r in feeds)}/{len(sources)}；检索候选 {matched_episodes} 条，本页返回 {len(items)} 条。'}
         if max_duration_seconds:
             result['duration_filter'] = {'max_duration_seconds': max_duration_seconds,
                 'unknown_episodes': sum(r.get('duration_seconds', 0) <= 0 for r in rows),
@@ -245,7 +248,7 @@ class RssResearch:
                      '包含条件（全部满足）：' + json.dumps(required_terms, ensure_ascii=False),
                      '排除条件（任一命中即排除）：' + json.dumps(excluded_terms, ensure_ascii=False)]
             lines += [f'精确词{json.dumps(c["literal_term"], ensure_ascii=False)}：{c["descriptions_containing"]}条说明包含。' for c in literal_counts]
-            lines += [f'符合组合字面条件：{result["literal_filter"]["eligible_descriptions"]}条；相关性检索命中：{matched_episodes}条；实际展示：{len(items)}条。',
+            lines += [f'符合组合字面条件：{result["literal_filter"]["eligible_descriptions"]}条；检索候选：{matched_episodes}条；本页展示：{len(items)}条。',
                       '统计对象为本次已存RSS说明及上述精确词；截断部分和不可用来源未检查。']
             evidence = '\n'.join(lines)
             snapshot = json.dumps({'evidence': evidence, 'feeds': [(s['id'], f[0]) for s, f in zip(sources, feeds)]}, ensure_ascii=False)
@@ -274,7 +277,7 @@ class RssResearch:
         more = offset + len(excerpt) < len(body)
         return {'status': 'ok', 'items': [self.evidence(row, excerpt, offset, fetched)], 'failures': failures, 'has_more': more,
                 'next_offset': offset + len(excerpt), 'total_characters': len(body),
-                'note': '分集RSS说明，非音频转写。' + ('源文本超过读取上限，完整性未保证。' if row['description_truncated'] else '')}
+                'note': '分集RSS说明。' + ('源文本超过读取上限，完整性未保证。' if row['description_truncated'] else '')}
 
     async def close(self):
         self.closed = True

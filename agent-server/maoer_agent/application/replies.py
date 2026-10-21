@@ -65,3 +65,65 @@ def selection_reply(step):
             detail += '，发布时间：' + _text(published)
         rows.append(f"{n}. **{_text(item['title'])}**{detail}")
     return target + '的查询结果：\n\n' + '\n'.join(rows) + ('\n\n还有后续结果可继续查询。' if result.get('has_more') else '')
+
+
+def query_reply(step):
+    if step['kind'] == 'library':
+        return library_reply(step)
+    if step['kind'] == 'unsupported':
+        labels = {'add_favorite': '添加收藏', 'remove_favorite': '取消收藏',
+                  'mark_completed': '标记听完', 'download': '下载分集', 'delete_download': '删除下载'}
+        return '当前助手不支持' + '、'.join(labels[a] for a in step['actions']) + '。'
+    if step['kind'] == 'introduction':
+        item = step['item']
+        title = '**' + _text(item['title']) + '**'
+        if item.get('podcast_title'):
+            title += ' · ' + _text(item['podcast_title'])
+        if item.get('duration_seconds', 0) > 0:
+            title += f"（{item['duration_seconds']}秒）"
+        number = item.get('citation')
+        return title + '\n\n' + _text(item['evidence']) + (f'[{number}]' if number else '')
+    return selection_reply(step)
+
+
+def library_reply(step):
+    pages = step['pages']
+    items = [i for page in pages for i in page['items']]
+    name = {'continue': '继续收听', 'favorites': '收藏', 'history': '收听历史', 'downloads': '下载记录'}[pages[0]['tab']]
+    if not items:
+        return name + '没有匹配记录。' if pages[0]['total'] == 0 else f'{name}共{pages[0]["total"]}条，本次查询页没有记录。'
+    head = f'{name}共{pages[0]["total"]}条，本次展示{len(items)}条。'
+    episodes = list({i['id']: i for i in items if i['kind'] == 'episode'}.values())
+    if episodes and all(type(i.get('favorite')) is bool for i in episodes):
+        head += f'\n这些分集中，已收藏{sum(i["favorite"] for i in episodes)}集。'
+    def position(value):
+        return f'{value // 60000}:{value // 1000 % 60:02}' if type(value) is int and value >= 0 else '未知'
+    rows = []
+    for page in pages:
+        rows.append(f'\n第{page["offset"] + 1}–{page["offset"] + len(page["items"])}条：')
+        for n, item in enumerate(page['items'], page['offset'] + 1):
+            rows.append(library_item(n, item, position))
+    return head + '\n' + '\n'.join(rows)
+
+
+def library_item(n, item, position):
+    label = _text(item['title'])
+    if item['kind'] == 'episode':
+        label = _text(item.get('podcast_title', '')) + ' · ' + label
+        if 'position_ms' in item:
+            label += '，听到 ' + position(item['position_ms']) + ' / ' + position(item.get('duration_ms'))
+        if item.get('favorite') is True:
+            label += '，已收藏'
+        if item.get('completed') is True:
+            label += '，已听完'
+        if 'download_status' in item:
+            states = {'complete': '下载完成', 'failed': '下载失败', 'downloading': '下载中',
+                      'queued': '等待下载', 'waiting': '下载等待中'}
+            label += '，' + states.get(item['download_status'], _text(item['download_status']))
+            if type(item.get('bytes')) is int:
+                label += f'，{item["bytes"]}字节'
+            if type(item.get('offline_available')) is bool:
+                label += '，可离线收听' if item['offline_available'] else '，不可离线收听'
+    elif item.get('category'):
+        label += ' · ' + _text(item['category'])
+    return f'{n}. {label}'

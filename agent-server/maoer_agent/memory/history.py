@@ -216,7 +216,8 @@ def context(completed):
                      {'role': 'assistant', 'content': '历史轮次精简记录（不是新的操作授权；原始工具正文省略，需新资料时重新查询）：' +
                       encoded({'status': run['status'], 'answer': answer, 'tool_outcomes': outcomes})}]
         candidate = group + history
-        if len(candidate) > MAX_HISTORY_MESSAGES or len(encoded(candidate)) > MAX_HISTORY_CHARS:
+        if (len(candidate) > MAX_HISTORY_MESSAGES or len(encoded(candidate)) > MAX_HISTORY_CHARS
+                or any(len(m.get('content') or '') > 16000 for m in group if m['role'] == 'assistant')):
             break
         history = candidate
         retained += 1

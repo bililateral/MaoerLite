@@ -6,6 +6,8 @@ import kotlinx.serialization.json.*
 import okio.ByteString.Companion.encodeUtf8
 import com.maoer.lite.data.error.*
 
+private val executionProcessInstance = agentId()
+
 /** Persist the execution boundary once; business handlers never manage receipts. */
 internal class AgentToolExecutor(
     private val storage: AgentStorage,
@@ -23,12 +25,12 @@ internal class AgentToolExecutor(
             require(old.fingerprint == fingerprint) { errorText("tool_arguments_changed") }
             val result = old.result ?: state("unknown", errorText("operation_interrupted"))
             storage.saveExecution(key, old.copy(result = result, conversationId = conversationId, runId = run))
-            return AgentReceipt(call.id, result)
+            return AgentReceipt(call.id, result, recovered = old.result != null && old.processInstance != executionProcessInstance)
         }
         // Claim has no device side effect and is safe to repeat if its response
         // is lost. Do not persist an execution marker until authorization succeeds.
         claim(run, call.id)
-        val execution = AgentExecution(fingerprint, conversationId = conversationId, runId = run)
+        val execution = AgentExecution(fingerprint, conversationId = conversationId, runId = run, processInstance = executionProcessInstance)
         storage.saveExecution(key, execution)
         var result: JsonObject
         try {

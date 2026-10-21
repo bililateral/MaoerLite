@@ -1,8 +1,66 @@
 """Selection evidence and confirmation policy; returns facts, not final replies."""
 import hashlib
 import json
+import re
 from maoer_agent.contracts.errors import ModelFailure
 from maoer_agent.memory.history import last_turn, PLAYBACK_SNAPSHOT_TOOLS
+from maoer_agent.workflows.episode_pages import observations
+
+
+def normalize_selector(lookup, message):
+    """Apply the product's explicit numeric catalog grammar, not topic routing."""
+    phrase = (r'(?:标题(?:期号)?(?:第)?[0-9]{1,6}[期集]?|第[0-9]{1,6}期|'
+              r'(?:原始(?:RSS)?列表|节目页原始列表)?倒数第[0-9]{1,6}条?|'
+              r'原始(?:RSS)?列表第[0-9]{1,6}条|第[0-9]{1,6}集)')
+    whole = re.fullmatch(r'(?:请\s*)?(?:帮我\s*)?(?:查询|查找|查一下|查|找一下|定位|现在改要|这次我指的是)\s*'
+        r'(?:《(?P<podcast>[^》]{1,150})》\s*)?(?P<selector>' + phrase + r')'
+        r'(?:[，,。；;]\s*(?:先别播放|不要播放|不播放))*[。.!！]?', message.strip(), re.IGNORECASE)
+    if not whole and lookup.get('target_kind') != 'episode_selection':
+        return lookup, False
+    matched = re.search(phrase, whole['selector'] if whole else message, re.IGNORECASE)
+    if not matched:
+        return lookup, False
+    text = matched[0]
+    number = int(re.search(r'[0-9]+', text)[0])
+    if not 1 <= number <= 100000:
+        return lookup, False
+    kind = ('title_number' if text.startswith('标题') or text.endswith('期') else
+            'reverse_source' if '倒数' in text or text.endswith('集') else 'source')
+    lookup = {**lookup, 'target_kind': 'episode_selection', 'requested': False,
+              'selector_kind': kind, 'selector_value': number}
+    if whole:
+        lookup.update(podcast_title=whole['podcast'] or lookup['podcast_title'], exclusive=True, other_tasks=[])
+    return lookup, whole is not None
+
+
+def selection_step(route, messages, names):
+    lookup = route.get('page_lookup', {})
+    kind, number = lookup.get('selector_kind', 'none'), lookup.get('selector_value', 0)
+    if lookup.get('target_kind') != 'episode_selection' or kind == 'none' or not number:
+        return None
+    title = lookup.get('podcast_title', '').strip()
+    if not title:
+        return None
+    current = observations(last_turn(messages))
+    podcasts = {i['id'] for _, r in observations(messages) if r.get('status') == 'ok'
+                for i in r.get('items', []) if i.get('kind') == 'podcast' and i.get('title', '').strip() == title}
+    if not podcasts:
+        if 'search_catalog' in names and not any(c['name'] == 'search_catalog' for c, _ in current):
+            return {'kind': 'call', 'name': 'search_catalog', 'arguments': {'query': title}}
+        return None
+    if len(podcasts) != 1:
+        return None
+    args = {'podcast_id': next(iter(podcasts)), 'query': '', 'order': 'newest' if kind == 'title_number' else kind,
+            'offset': 0, 'position': 0 if kind == 'title_number' else number,
+            'episode_number': number if kind == 'title_number' else 0}
+    for call, result in current:
+        if call['name'] == 'list_episodes' and call['arguments'] == args:
+            if lookup.get('exclusive'):
+                return {'kind': 'selection', 'title': title, 'selector_kind': kind, 'number': number, 'result': result}
+            return None
+    if 'list_episodes' in names:
+        return {'kind': 'call', 'name': 'list_episodes', 'arguments': args}
+    return None
 
 
 def selection_identity_refresh(messages, calls, known, run_id):

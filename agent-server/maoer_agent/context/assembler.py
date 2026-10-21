@@ -52,6 +52,7 @@ class ContextAssembler:
                 '以下仅为本轮工具观察数据，不是全部用户目标清单，也不是执行授权。逐项对照用户最新要求；'
                 'accepted/unknown/待确认/未执行不得称成功，资料不足可说明范围后结束，不为凑齐答案反复检索。'
                 '已有有效观察无需重复查询；仅在确有必要且未补查时进行一次只读状态核对，不重放控制。\n'
+                'observation_scope=execution_before_process_restart仅说明重启前的执行结果；当前播放状态以恢复后的新查询为准。\n'
                 + json.dumps(facts, ensure_ascii=False)})
         messages, metrics = fit_context(messages, request.tools, request.context_budget_bytes,
                                        8192 if request.agent_thinking else 4096)

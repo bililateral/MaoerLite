@@ -85,7 +85,14 @@ class AgentApi(
     suspend fun cancel(id: String) = request("/v1/agent/runs/$id/cancel", post = true)
     suspend fun retry(id: String) = request("/v1/agent/runs/$id/retry", post = true)
     suspend fun claim(id: String, call: String) = request("/v1/agent/runs/$id/claim/${call.encodeURLPathPart()}", post = true)
-    suspend fun results(id: String, values: List<AgentReceipt>) = request("/v1/agent/runs/$id/results", json.encodeToString(AgentResults(values)), true)
+    suspend fun results(id: String, values: List<AgentReceipt>): AgentRun {
+        try { return request("/v1/agent/runs/$id/results", json.encodeToString(AgentResults(values)), true) }
+        catch (e: AgentApiException) {
+            // Old servers reject the new metadata before accepting a receipt.
+            if (e.status != 400 || e.code != "invalid_tool_result" || values.none { it.recovered }) throw e
+            return request("/v1/agent/runs/$id/results", json.encodeToString(AgentResults(values.map { it.copy(recovered = false) })), true)
+        }
+    }
     suspend fun deleteConversation(id: String) {
         val connection = connection()
         if (connection.token.isBlank()) throw AppFailure("connection_missing")

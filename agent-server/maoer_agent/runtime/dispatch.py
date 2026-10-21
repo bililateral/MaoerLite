@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from maoer_agent.agent.state import TaskConflict, READ_ONLY
 from maoer_agent.tools.results import checked_result
+from maoer_agent.memory.history import PLAYBACK_SNAPSHOT_TOOLS
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,9 @@ class ToolDispatcher:
     def submit(self, run_id, results, *, busy=False):
         run = self.get_run(run_id)
         if len(results) != 1: raise TaskConflict('single_result_required')
+        recovered = results[0].get('recovered', False)
+        # Recovery is transport metadata, not part of an immutable execution receipt.
+        results = [{'call_id': r['call_id'], 'result': r['result']} for r in results]
         fingerprint = hashlib.sha256(json.dumps(results, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         key = ','.join(r['call_id'] for r in results)
         if key in run['receipts']:
@@ -82,6 +86,10 @@ class ToolDispatcher:
         raw = results[0]['result']
         run.setdefault('raw_results', {})[key] = raw
         checked = checked_result(run['calls'][0], raw)
+        if run['calls'][0]['name'] in PLAYBACK_SNAPSHOT_TOOLS:
+            run['playback_refresh_pending'] = recovered
+            if recovered:
+                run['recovered_playback_calls'] = list(dict.fromkeys(run.get('recovered_playback_calls', []) + [key]))
         run['results'].append({'call_id': key, 'result': checked})
         if run['calls'][0]['name'] not in READ_ONLY and checked.get('status') != 'ok':
             run['control_blocked'] = True

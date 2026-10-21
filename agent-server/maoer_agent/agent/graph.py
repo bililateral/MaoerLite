@@ -12,7 +12,7 @@ from maoer_agent.core.errors import error_message
 from maoer_agent.tools.definitions import validated_calls
 from maoer_agent.memory.history import last_turn, remember, replay_references
 from maoer_agent.memory.summary import MAX_BATCHES, SUMMARY_TIMEOUT, batch, parse_summary, summary_messages
-from maoer_agent.workflows.selection import episode_selection_question
+from maoer_agent.workflows.selection import episode_selection_question, selection_step
 from maoer_agent.workflows.planning import prepare_calls, tool_scope
 from maoer_agent.agent.state import State, MAX_TOOL_CALLS, MAX_MODEL_ROUNDS
 from maoer_agent.workflows.intent import classify, allowed_tools, DEVICE_TOOLS
@@ -23,14 +23,17 @@ from maoer_agent.context.assembler import AnswerInput, ContextAssembler
 from maoer_agent.contracts.execution import ResearchContext, PageView
 from maoer_agent.core.limits import MAX_MODEL_ATTEMPTS
 from maoer_agent.workflows import episode_pages
+from maoer_agent.workflows.recommendations import criteria_call
+from maoer_agent.workflows.recovery import recovery_scope
 
 
 class AgentGraph:
-    def __init__(self, settings, store, model, get_run, research, catalog, page_renderer):
+    def __init__(self, settings, store, model, get_run, research, catalog, page_renderer, selection_renderer):
         self.settings, self.store, self.model, self.get_run = settings, store, model, get_run
         self.research = research
         self.catalog = catalog
         self.page_renderer = page_renderer
+        self.selection_renderer = selection_renderer
         self.context = ContextAssembler()
         self.feed_urls = frozenset(i['feed_url'] for i in catalog)
 
@@ -50,6 +53,8 @@ class AgentGraph:
         raw.setdefault(receipt['call_id'], receipt['result'])
         self.store.update(run_id, raw_results=raw)
         result = checked_result(call, raw[receipt['call_id']]) if call else receipt['result']
+        if receipt['call_id'] in run.get('recovered_playback_calls', []):
+            result = {**result, 'observation_scope': 'execution_before_process_restart'}
         try:
             result, sources = annotate(run, result)
         except (ValueError, TypeError, KeyError, OverflowError, OSError):
@@ -180,6 +185,7 @@ class AgentGraph:
                 self.store.update(run_id, page_checks=checks)
                 continue
             if step['kind'] == 'answer':
+                step['presentation']['target_kind'] = state['route']['page_lookup'].get('target_kind', 'episode_page')
                 self.store.update(run_id, page_resolution=step['resolution'])
                 return {'role': 'assistant', 'content': self.page_renderer(step)}
             call_id = 'page_' + run_id + '_' + str(state.get('tool_count', 0))
@@ -193,11 +199,42 @@ class AgentGraph:
             raise ModelFailure('tool_round_limit')
         run_id = state['run_id']
         final_only = state.get('final_only', False) or state.get('tool_count', 0) >= MAX_TOOL_CALLS
+        run = self.get_run(run_id)
+        if (run.get('recovered_playback_calls') and not run.get('playback_refresh_pending')
+                and 'control_actions' not in state.get('route', {})):
+            # Upgrade a legacy checkpoint once, retaining its existing route.
+            async def recovery_intent(settings, messages, tools, publish):
+                return await self.invoke_model(run_id, 'recovery_intent', settings, messages, tools, publish)
+            checked = await classify(recovery_intent, self.settings, state['messages'], [])
+            route = {**state.get('route', {}), 'control_actions': checked['control_actions']}
+            state = {**state, 'route': route}
+            self.store.update(run_id, route=route)
         available, allowed = tool_scope(state.get('route', {}),
             self.get_run(run_id)['input'].get('capabilities', []),
             state.get('extended_episodes', False), state.get('research', False), final_only)
+        available, allowed = recovery_scope(self.get_run(run_id), state.get('route', {}), available, allowed)
         names = {d['function']['name'] for d in available}
-        if state.get('research') and episode_pages.active(state.get('route', {})):
+        criteria = None if final_only else criteria_call(state.get('route', {}), state['messages'], names)
+        selected = selection_step(state.get('route', {}), state['messages'], names) if state.get('extended_episodes') else None
+        if self.get_run(run_id).get('playback_refresh_pending') and not final_only:
+            message = {'role': 'assistant', 'content': None, 'tool_calls': [{
+                'id': 'recovery_state_' + run_id + '_' + str(state.get('tool_count', 0)),
+                'type': 'function', 'function': {'name': 'get_playback_state', 'arguments': '{}'}}]}
+            messages = state['messages']
+        elif criteria:
+            message = {'role': 'assistant', 'content': None, 'tool_calls': [{
+                'id': 'criteria_' + run_id + '_' + str(state.get('tool_count', 0)), 'type': 'function',
+                'function': {'name': criteria['name'], 'arguments': json.dumps(criteria['arguments'], ensure_ascii=False)}}]}
+            messages = state['messages']
+        elif selected:
+            if selected['kind'] == 'selection':
+                message = {'role': 'assistant', 'content': self.selection_renderer(selected)}
+            else:
+                message = {'role': 'assistant', 'content': None, 'tool_calls': [{
+                    'id': 'selection_' + run_id + '_' + str(state.get('tool_count', 0)), 'type': 'function',
+                    'function': {'name': selected['name'], 'arguments': json.dumps(selected['arguments'], ensure_ascii=False)}}]}
+            messages = state['messages']
+        elif state.get('research') and episode_pages.active(state.get('route', {})):
             message = await self.page_message(state, names, final_only)
             messages = state['messages']
         else:
@@ -233,6 +270,7 @@ class AgentGraph:
                 checked = await classify(route_model, self.settings, state['messages'], [], disputed)
                 route = {**route, 'device': route.get('device', False) or checked['device']}
                 allowed = allowed_tools(route)
+                _, allowed = recovery_scope(self.get_run(run_id), route, [], allowed)
                 self.store.update(run_id, route=route)
             except ModelFailure as exc:
                 if exc.code == 'model_attempt_budget_exhausted':

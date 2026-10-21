@@ -121,7 +121,8 @@ def register(app, settings):
             values = data['results']
             if not isinstance(values, list) or len(values) != 1: raise ValueError()
             for value in values:
-                if set(value) != {'call_id', 'result'} or not isinstance(value['call_id'], str): raise ValueError()
+                if not {'call_id', 'result'} <= set(value) or set(value) - {'call_id', 'result', 'recovered'} or not isinstance(value['call_id'], str): raise ValueError()
+                if type(value.get('recovered', False)) is not bool: raise ValueError()
                 result = value['result']
                 if not isinstance(result, dict) or result.get('status') not in ('ok', 'error', 'unknown', 'accepted'): raise ValueError()
                 if len(json.dumps(result, ensure_ascii=False)) > 12000: raise ValueError()

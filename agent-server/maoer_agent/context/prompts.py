@@ -128,7 +128,7 @@ def build_system(names, extended=False, research=False, final_only=False):
     if not research and 'get_podcast_details' in names:
         content += '\n' + PODCAST_METADATA
     if 'search_rss' in names:
-        content += '\nsearch_rss按自然语言进行RSS语义与关键词检索，每页最多12个不同分集，按相关性排序。has_more为true时保持查询与筛选条件，用next_offset续页；追加或改变筛选条件从offset=0重新查询。推荐数量按用户要求选择，列出全部时继续读取剩余页。查最新发布请按日期查询。语义命中仍需核对原文。'
+        content += '\nsearch_rss按自然语言进行RSS语义与关键词检索，每页最多12个不同分集，按相关性排序。has_more为true时保持查询与筛选条件，用next_offset续页；追加或改变筛选条件从offset=0重新查询。时长使用duration_seconds；0为未知，max_duration_seconds按真实时长筛选。轻松等偏好按内容语义判断，不要求说明含有同名字词。推荐数量按用户要求选择，列出全部时继续读取剩余页。查最新发布请按日期查询。语义命中仍需核对原文。'
     if 'list_recent_updates' in names:
         content += '\n用户问最近更新了哪些播客，直接list_recent_updates(mode=podcasts)，不要求先指定一档、不用当前播放器或个人历史替代全目录。问近期分集可用mode=episodes；未指定天数用days=0并说明实际日期，不凭空假设最近7天。mode=podcasts且days=0时，total_matches为各档最近一期的数量；按“查询了多少档、展示最近几项”和实际日期回答，不把该总数写成近期新增节目数。发布日期直接使用工具published_display（北京时间），不要将原始GMT时间当北京时间，也不要再次换算published_display。刷新日期不是发布日期；partial/stale或freshness_complete=false时限定为本次可用来源，不能宣称全部目录最新。若读完分页才覆盖全部，不把前8项当总数。日期直接标注北京时间；用户未问上次访问后的变化时，回答不附加访问基线说明。'
     if 'query_library' in names:

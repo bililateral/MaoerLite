@@ -45,6 +45,7 @@ class Empty(StrictModel):
 class ResearchSearch(StrictModel):
     query: str = Field(min_length=2, max_length=300)
     podcast_id: str = Field(default='', max_length=150)
+    max_duration_seconds: int = Field(default=0, ge=0, description='实际分集时长上限，单位秒；0不限。按RSS时长元数据筛选，未知时长不进入限时候选。')
     offset: int = Field(default=0, ge=0, le=100000, description='相关性排序后从0开始的分集偏移量；每页最多12条。续页保持查询和筛选条件相同，使用返回的next_offset；改变条件从0开始。')
     required_terms: list[str] = Field(default_factory=list, max_length=8, description='可选全文字面筛选：分集说明必须包含每个词，不是语义匹配。')
     excluded_terms: list[str] = Field(default_factory=list, max_length=8, description='可选全文字面排除：说明含任一词即排除；说明截断的分集排除出候选；筛选对象为RSS文字。')

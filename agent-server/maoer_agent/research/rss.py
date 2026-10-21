@@ -16,6 +16,21 @@ from maoer_agent.contracts.research import RSS_SEARCH_PAGE_SIZE
 
 CATALOG = json.loads(files('maoer_agent.resources').joinpath('research_catalog.json').read_text(encoding='utf-8'))
 CONTENT = '{http://purl.org/rss/1.0/modules/content/}encoded'
+ITUNES_DURATION = '{http://www.itunes.com/dtds/podcast-1.0.dtd}duration'
+
+
+def duration_seconds(value):
+    """Same seconds / MM:SS / HH:MM:SS interpretation as Android RssParser."""
+    parts = value.strip().split(':')
+    if not 1 <= len(parts) <= 3 or any(not re.fullmatch(r'[+-]?[0-9]+', p) for p in parts):
+        return 0
+    numbers = [int(p) for p in parts]
+    if any(n < 0 or n > 10_000_000 for n in numbers):
+        return 0
+    total = 0
+    for number in numbers:
+        total = total * 60 + number
+    return total
 
 
 def plain(text, paragraphs=False):
@@ -57,6 +72,7 @@ def parse_feed(raw, source):
         result.append({'kind': 'episode', 'id': source['id'] + ':' + digest(identity), 'podcast_id': source['id'],
                        'title': name[:300], 'podcast_title': title[:150], 'published': published[:150],
                        'source_url': source['feed_url'], 'original_url': link if urlsplit(link).scheme in ('http', 'https') else '',
+                       'duration_seconds': duration_seconds(item.findtext(ITUNES_DURATION) or ''),
                        'description': body[:262144], 'description_truncated': len(body) > 262144})
         if len(result) >= 1000: break
     return list({row['id']: row for row in result}.values())
@@ -77,7 +93,8 @@ class RssResearch:
 
     async def load(self, source, force=False, diagnostics=None):
         fetched, rows = self.store.feed(source['id'])
-        if not force and rows and time.time() - fetched < 3600: return fetched, rows
+        if not force and rows and all('duration_seconds' in r for r in rows) and time.time() - fetched < 3600:
+            return fetched, rows
         async with self.slots:
             try:
                 async with self.client.stream('GET', source['feed_url'], follow_redirects=True,
@@ -138,7 +155,7 @@ class RssResearch:
                     pass  # Query response reports actual vector coverage.
             await asyncio.sleep(3600)
 
-    async def search(self, query, podcast_id='', required_terms=None, excluded_terms=None, offset=0):
+    async def search(self, query, podcast_id='', required_terms=None, excluded_terms=None, offset=0, max_duration_seconds=0):
         required_terms, excluded_terms = required_terms or [], excluded_terms or []
         sources = [s for s in CATALOG if not podcast_id or s['id'] == podcast_id]
         if not sources: return {'status': 'error', 'code': 'rss_podcast_missing', 'note': error_message('rss_podcast_missing')}
@@ -179,6 +196,8 @@ class RssResearch:
         if vector is not None: import numpy as np
         for key, row, start, text, _ in entries:
             if not checks[row['id']]['passes']: continue
+            if max_duration_seconds and not 0 < row.get('duration_seconds', 0) <= max_duration_seconds:
+                continue
             haystack = (row['title'] + ' ' + text).lower()
             lexical = sum(t in haystack for t in terms) / max(1, len(terms))
             semantic = float(np.dot(np.frombuffer(vectors[key], dtype='float32'), vector)) if vector is not None and key in vectors else 0
@@ -215,6 +234,10 @@ class RssResearch:
                 'coverage_total': len(sources), 'semantic_indexed_passages': len(vectors) if vector is not None else 0,
                 'total_passages': len(entries), 'audio_analyzed': False,
                 'note': f'RSS可用源 {sum(bool(r) for _, r in feeds)}/{len(sources)}；相关候选 {matched_episodes} 条，返回 {len(items)} 条。检索对象为已存RSS说明；字面筛选结果见逐项检查字段。'}
+        if max_duration_seconds:
+            result['duration_filter'] = {'max_duration_seconds': max_duration_seconds,
+                'unknown_episodes': sum(r.get('duration_seconds', 0) <= 0 for r in rows),
+                'eligible_episodes': sum(0 < r.get('duration_seconds', 0) <= max_duration_seconds for r in rows)}
         if required_terms or excluded_terms:
             label = sources[0]['title'] if len(sources) == 1 else '所查询节目'
             lines = [f'{label}：已存RSS说明字面检查',

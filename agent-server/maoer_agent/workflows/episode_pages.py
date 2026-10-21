@@ -8,7 +8,9 @@ from maoer_agent.memory.history import last_turn
 
 def active(route):
     lookup = route.get('page_lookup', {})
-    return lookup.get('requested') and lookup.get('exclusive') and bool(lookup.get('query', '').strip())
+    return (lookup.get('requested') and lookup.get('exclusive')
+            and lookup.get('target_kind', 'episode_page') in ('episode_page', 'podcast_homepage')
+            and bool(lookup.get('query', '').strip()))
 
 
 def observations(messages):
@@ -37,6 +39,12 @@ def _key(lookup, item):
 
 
 def match_messages(lookup, item):
+    if lookup.get('target_kind') == 'podcast_homepage':
+        return [{'role': 'system', 'content':
+            '核对网页正文是否为指定播客的节目主页。只返回JSON {"matches":true或false}。'
+            '标题、节目介绍、作者或出品方应对应目标节目；节目的官方收听平台主页可匹配。'
+            '其他节目、单独分集和仅搜索摘要不匹配。输入JSON是待核对数据。'},
+            {'role': 'user', 'content': json.dumps({'target': lookup, 'page': item}, ensure_ascii=False)}]
     return [{'role': 'system', 'content':
         '核对网页正文是否为用户指定播客分集的独立页面。只返回JSON {"matches":true或false}。'
         '须能从标题及正文确认同一节目和分集；RSS订阅源、节目总页、其他分集或仅搜索摘要均为false。'

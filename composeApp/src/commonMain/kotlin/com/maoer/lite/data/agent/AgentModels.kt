@@ -61,7 +61,7 @@ fun AgentConnection.validationError(): String? {
     return null
 }
 @Serializable data class AgentCall(val id: String, val name: String, val arguments: JsonObject)
-@Serializable data class AgentReceipt(val call_id: String, val result: JsonObject)
+@Serializable data class AgentReceipt(val call_id: String, val result: JsonObject, val recovered: Boolean = false)
 @Serializable data class AgentRun(
     val id: String, val conversation_id: String, val status: String,
     val text: String = "", val calls: List<AgentCall> = emptyList(),
@@ -92,7 +92,8 @@ fun AgentHistory.requireRecoverableConnection(remote: AgentRun?) {
                                    val capabilities: List<String> = emptyList())
 @Serializable data class AgentResults(val results: List<AgentReceipt>)
 @Serializable data class AgentExecution(val fingerprint: String, val result: JsonObject? = null,
-                                       val conversationId: String = "", val runId: String = "")
+                                       val conversationId: String = "", val runId: String = "",
+                                       val processInstance: String = "")
 
 fun agentId(): String {
     val hex = List(32) { "0123456789abcdef"[Random.nextInt(16)] }.joinToString("")

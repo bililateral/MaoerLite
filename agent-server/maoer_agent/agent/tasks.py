@@ -16,14 +16,14 @@ from maoer_agent.runtime.dispatch import ToolDispatcher
 
 
 class AgentTasks:
-    def __init__(self, settings, saver, store, model, research, catalog, page_renderer):
+    def __init__(self, settings, saver, store, model, research, catalog, page_renderer, selection_renderer):
         self.settings, self.store = settings, store
         self.saver = saver
         self.deletion_lock = asyncio.Lock()
         self.model = model
         self.jobs = {}
         self.dispatcher = ToolDispatcher(store, self.get_run)
-        self.graph = AgentGraph(settings, store, model, self.get_run, research, catalog, page_renderer).compile(saver)
+        self.graph = AgentGraph(settings, store, model, self.get_run, research, catalog, page_renderer, selection_renderer).compile(saver)
 
     def launch(self, run_id, value):
         if run_id in self.jobs: raise TaskConflict('task_busy')

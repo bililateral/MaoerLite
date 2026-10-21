@@ -14,6 +14,7 @@ class Item(BaseModel):
     # Search providers may return a valid URL with an empty title.
     title: str = Field(max_length=300)
     podcast_id: str | None = None
+    duration_seconds: int | None = Field(default=None, ge=0)
     source_url: str | None = None
     evidence: str | None = None
     document_id: str | None = None
@@ -108,7 +109,7 @@ def outcome_facts(messages):
             row = {'call_id': message['tool_call_id'], 'tool': calls[message['tool_call_id']],
                    'status': result.get('status', 'unknown')}
             for key in ('executed', 'code', 'reason', 'playing', 'episode_id', 'playback_speed',
-                        'sleep_remaining_ms', 'sleep_end_of_episode', 'has_more'):
+                        'sleep_remaining_ms', 'sleep_end_of_episode', 'has_more', 'observation_scope'):
                 if key in result: row[key] = result[key]
             if isinstance(result.get('items'), list):
                 row['evidence'] = [{'id': i.get('id'), 'citation': i.get('citation'),

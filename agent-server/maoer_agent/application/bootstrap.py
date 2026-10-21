@@ -12,7 +12,7 @@ from maoer_agent.research.rss import RssResearch, CATALOG
 from maoer_agent.research.web import WebResearch
 from maoer_agent.research.tools import ResearchTools
 from maoer_agent.application.sources import SourceQueries
-from maoer_agent.application.replies import page_reply
+from maoer_agent.application.replies import page_reply, selection_reply
 
 
 @asynccontextmanager
@@ -31,7 +31,7 @@ async def task_service(settings, client, gate, path):
             services.push_async_callback(rss.close)
             saver = await services.enter_async_context(AsyncSqliteSaver.from_conn_string(str(path) + '.checkpoints'))
             research = ResearchTools(knowledge, rss, web)
-            tasks = AgentTasks(settings, saver, store, partial(generate, client=client, gate=gate), research, CATALOG, page_reply)
+            tasks = AgentTasks(settings, saver, store, partial(generate, client=client, gate=gate), research, CATALOG, page_reply, selection_reply)
             services.push_async_callback(tasks.close)
             rss.start()
             await tasks.recover()

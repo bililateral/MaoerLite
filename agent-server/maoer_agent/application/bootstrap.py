@@ -6,6 +6,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from maoer_agent.agent.tasks import AgentTasks
 from maoer_agent.model.client import generate
 from maoer_agent.model.embeddings import LocalEmbeddings
+from maoer_agent.model.relevance import ModelRelevanceJudge
 from maoer_agent.storage.tasks import Store
 from maoer_agent.research.store import ResearchStore
 from maoer_agent.research.rss import RssResearch, CATALOG
@@ -25,7 +26,8 @@ async def task_service(settings, client, gate, path):
         knowledge = ResearchStore(path.parent / 'research.sqlite3')
         storage.callback(knowledge.close)
         async with AsyncExitStack() as services:
-            rss = RssResearch(knowledge, client, LocalEmbeddings(path.parent / 'embedding-model'))
+            rss = RssResearch(knowledge, client, LocalEmbeddings(path.parent / 'embedding-model'),
+                              ModelRelevanceJudge(settings.model, settings.context_budget_bytes))
             web = WebResearch(settings, client, knowledge)
             services.push_async_callback(web.close)
             services.push_async_callback(rss.close)

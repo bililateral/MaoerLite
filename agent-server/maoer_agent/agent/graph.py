@@ -339,6 +339,9 @@ class AgentGraph:
     async def research_node(self, state):
         """Plan has committed with sync durability before any external request."""
         run_id = state['run_id']
+        async def relevance_model(messages):
+            async def discard(event): pass
+            return await self.invoke_model(run_id, 'rss_relevance', replace(self.settings, agent_thinking=False, model_temperature=0), messages, [], discard)
         plan = state.get('research_plan', [])
         results = list(state.get('deferred_results', []))
         for call in plan:
@@ -362,7 +365,7 @@ class AgentGraph:
                     current = self.get_run(run_id)
                     old = await self.research.perform(call, ResearchContext(
                         run_id + ':' + call['id'], current.get('input', {}).get('message', ''),
-                        tuple(current.get('sources', []))))
+                        tuple(current.get('sources', [])), relevance_model))
             results.append(self.record_result(run_id, {'call_id': call['id'], 'result': old}, call))
         messages = state['messages']
         if not state['calls']:

@@ -15,6 +15,8 @@ def request_body(payload, settings, *, agent=False):
         body['thinking'] = {'type': 'disabled'}
     if not agent:
         return body
+    if settings.model_temperature is not None:
+        body['temperature'] = settings.model_temperature
     if settings.agent_thinking:
         body['thinking'] = {'type': 'enabled'}
         body['reasoning_effort'] = settings.reasoning_effort

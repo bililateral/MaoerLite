@@ -10,6 +10,8 @@ import xml.etree.ElementTree as ET
 from importlib.resources import files
 from urllib.parse import urlsplit
 from maoer_agent.model.embeddings import Embeddings
+from maoer_agent.contracts.retrieval import RelevanceJudge
+from maoer_agent.contracts.errors import ModelFailure
 from maoer_agent.research.store import digest
 from maoer_agent.core.errors import error_message
 from maoer_agent.contracts.research import RSS_SEARCH_PAGE_SIZE
@@ -85,8 +87,9 @@ def chunks(row):
 
 
 class RssResearch:
-    def __init__(self, store, client, embeddings: Embeddings):
-        self.store, self.client, self.embeddings = store, client, embeddings
+    def __init__(self, store, client, embeddings: Embeddings, reranker: RelevanceJudge):
+        self.store, self.client, self.embeddings, self.reranker = store, client, embeddings, reranker
+        self.ranked_cache = {}
         self.slots = asyncio.Semaphore(3)
         self.background = None
         self.closed = False
@@ -155,7 +158,7 @@ class RssResearch:
                     pass  # Query response reports actual vector coverage.
             await asyncio.sleep(3600)
 
-    async def search(self, query, podcast_id='', required_terms=None, excluded_terms=None, offset=0, max_duration_seconds=0):
+    async def search(self, query, podcast_id='', required_terms=None, excluded_terms=None, offset=0, max_duration_seconds=0, *, relevance_model=None):
         required_terms, excluded_terms = required_terms or [], excluded_terms or []
         sources = [s for s in CATALOG if not podcast_id or s['id'] == podcast_id]
         if not sources: return {'status': 'error', 'code': 'rss_podcast_missing', 'note': error_message('rss_podcast_missing')}
@@ -201,19 +204,54 @@ class RssResearch:
             haystack = (row['title'] + ' ' + text).lower()
             lexical = sum(t in haystack for t in terms) / max(1, len(terms))
             semantic = float(np.dot(np.frombuffer(vectors[key], dtype='float32'), vector)) if vector is not None and key in vectors else 0
-            if lexical >= 0.25 or semantic >= 0.45:
-                scored.append((0.65 * semantic + 0.35 * lexical, row, start, text))
+            scored.append((0.65 * semantic + 0.35 * lexical, row, start, text))
         scored.sort(key=lambda e: e[0], reverse=True)
+        candidates = {}
+        for entry in scored:
+            identity = entry[1]['id']
+            if identity not in candidates and len(candidates) < 64:
+                candidates[identity] = entry
+        cache_key = digest(json.dumps([self.reranker.namespace, query, required_terms, excluded_terms,
+            max_duration_seconds, [{key: value for key, value in row.items() if key != 'description'} for row in rows],
+            [(key, row['id']) for key, row, *_ in entries], sorted(vectors)], ensure_ascii=False))
+        if cache_key in self.ranked_cache:
+            scored = self.ranked_cache[cache_key]
+        else:
+            documents = []
+            for entry in candidates.values():
+                row = entry[1]
+                start = max(0, entry[2]-100)
+                passages = [{'id':'match','offset':start,'text':row['description'][start:start+500] or row['title']}]
+                if start != 0:
+                    passages.append({'id':'lead','offset':0,'text':row['description'][:500] or row['title']})
+                documents.append({'id':row['id'],'title':row['title'],'passages':passages})
+            try:
+                relevance = await self.reranker.select(query, documents, relevance_model) if documents else []
+            except ModelFailure:
+                raise
+            except Exception:
+                return {'status': 'error', 'code': 'rss_rerank_failed', 'note': error_message('rss_rerank_failed'),
+                        'items': [], 'failures': failures, 'semantic_query_available': vector is not None,
+                        'semantic_indexed_passages': sum(key in vectors for key, *_ in entries),
+                        'total_passages': len(entries), 'relevance_available': False}
+            scored = []
+            for position, match in enumerate(relevance):
+                entry = candidates[match['id']]
+                scored.append((len(relevance)-position,*entry[1:]))
+            if len(self.ranked_cache) >= 32:
+                self.ranked_cache.pop(next(iter(self.ranked_cache)))
+            self.ranked_cache[cache_key] = scored
         items, selected = [], set()
         timestamps = {row['id']: fetched for fetched, group in feeds for row in group}
         matched_episodes = len({row['id'] for _, row, _, _ in scored})
+        page_count = min(RSS_SEARCH_PAGE_SIZE, max(1, matched_episodes - offset))
+        evidence_limit = min(4000, 20000 // page_count)
         for score, row, start, text in scored:
             if row['id'] in selected: continue
             selected.add(row['id'])
             if len(selected) <= offset: continue
-            # Short descriptions can be read completely within the result budget.
-            if len(row['description']) <= 1000:
-                start, text = 0, row['description']
+            start = max(0, min(start - 100, len(row['description']) - evidence_limit))
+            text = row['description'][start:start + evidence_limit]
             item = self.evidence(row, text, start, timestamps.get(row['id'], 0))
             item['description_checks'] = checks[row['id']]
             items.append(item)
@@ -235,6 +273,8 @@ class RssResearch:
                 'coverage_total': len(sources),
                 'semantic_indexed_passages': sum(key in vectors for key, *_ in entries),
                 'semantic_unique_vectors': len(vectors), 'semantic_query_available': vector is not None,
+                'relevance_available': True, 'relevance_model': self.reranker.namespace,
+                'relevance_candidates': len(candidates), 'relevance_candidate_limit': 64,
                 'total_passages': len(entries), 'audio_analyzed': False,
                 'note': f'RSS可用源 {sum(bool(r) for _, r in feeds)}/{len(sources)}；检索候选 {matched_episodes} 条，本页返回 {len(items)} 条。'}
         if max_duration_seconds:

@@ -21,13 +21,13 @@ def normalize_selector(lookup, message):
               + original + r'?倒数第[0-9]{1,6}条?|'
               + original + r'第[0-9]{1,6}条|第[0-9]{1,6}集)')
     whole = re.fullmatch(r'(?:请\s*)?(?:帮我\s*)?(?:查询|查找|查一下|查|改查|找一下|定位|现在改要|这次我指的是)\s*'
-        r'(?:《(?P<podcast>[^》]{1,150})》\s*)?(?P<selector>' + phrase + r')'
-        r'(?:[，,。；;]\s*(?:先别播放|不要播放|不播放))*[。.!！]?', message.strip(), re.IGNORECASE)
+        r'(?:(?:《(?P<podcast>[^》]{1,150})》|(?P<plain_podcast>[^，,。；;《》]{1,150}?))\s*)?(?P<selector>' + phrase + r')'
+        r'(?:[，,。；;]\s*(?:先别播放|先不播放|不要播放|不播放))*[。.!！]?', message.strip(), re.IGNORECASE)
     if not whole and lookup.get('target_kind') != 'episode_selection':
         return lookup, False
     matched = re.search(phrase, whole['selector'] if whole else message, re.IGNORECASE)
     if not matched:
-        return {**lookup, 'selector_kind': 'none', 'selector_value': 0}, False
+        return lookup, False
     text = matched[0]
     number = int(re.search(r'[0-9]+', text)[0])
     if not 1 <= number <= 100000:
@@ -37,7 +37,7 @@ def normalize_selector(lookup, message):
     lookup = {**lookup, 'target_kind': 'episode_selection', 'requested': False,
               'selector_kind': kind, 'selector_value': number}
     if whole:
-        lookup.update(podcast_title=whole['podcast'] or lookup['podcast_title'], exclusive=True, other_tasks=[])
+        lookup.update(podcast_title=whole['podcast'] or whole['plain_podcast'] or lookup['podcast_title'], exclusive=True, other_tasks=[])
     return lookup, whole is not None
 
 

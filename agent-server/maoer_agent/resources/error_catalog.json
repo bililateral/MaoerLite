@@ -212,5 +212,6 @@
   "json_required": "助手服务要求JSON请求格式，请检查客户端版本。",
   "body_too_large": "请求内容超过服务读取上限，请缩短消息或反馈客户端问题。",
   "request_timeout": "助手服务等待客户端上传请求超时，请检查手机到服务器的连接后恢复。",
-  "tool_not_allowed": "本轮未开放此项操作。"
+  "tool_not_allowed": "本轮未开放此项操作。",
+  "rss_rerank_failed": "RSS检索相关性核对失败。"
 }

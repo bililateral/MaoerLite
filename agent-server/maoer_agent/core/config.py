@@ -28,6 +28,7 @@ class Settings:
     context_budget_bytes: int = 240000
     model_source_ipv4: str = ''
     model_dns_ipv4: str = ''
+    model_temperature: float | None = None
 
     @property
     def endpoint(self):

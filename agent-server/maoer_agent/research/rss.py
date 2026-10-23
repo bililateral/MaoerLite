@@ -289,7 +289,9 @@ class RssResearch:
                      '排除条件（任一命中即排除）：' + json.dumps(excluded_terms, ensure_ascii=False)]
             lines += [f'精确词{json.dumps(c["literal_term"], ensure_ascii=False)}：{c["descriptions_containing"]}条说明包含。' for c in literal_counts]
             lines += [f'符合组合字面条件：{result["literal_filter"]["eligible_descriptions"]}条；检索候选：{matched_episodes}条；本页展示：{len(items)}条。',
-                      '统计对象为本次已存RSS说明及上述精确词；截断部分和不可用来源未检查。']
+                      '统计对象为本次已存RSS说明及上述精确词。']
+            if result['literal_filter']['incomplete_descriptions'] or result['coverage_available'] < len(sources):
+                lines.append('截断部分和不可用来源未检查。')
             evidence = '\n'.join(lines)
             snapshot = json.dumps({'evidence': evidence, 'feeds': [(s['id'], f[0]) for s, f in zip(sources, feeds)]}, ensure_ascii=False)
             result['statistics'] = {'kind': 'rss_statistics', 'id': digest(snapshot),

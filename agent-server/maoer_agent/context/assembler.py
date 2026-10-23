@@ -1,13 +1,15 @@
 """Pure, purpose-specific model input assembly. No task writes or external I/O."""
 import json
+from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
-from maoer_agent.context.prompts import build_system, model_instructions
+from maoer_agent.context.prompts import build_system, model_instructions, EPISODE_INTRODUCTION
 from maoer_agent.context.route import instructions
 from maoer_agent.context.budget import fit_context
 from maoer_agent.memory.history import last_turn, model_messages
 from maoer_agent.memory.summary import with_summary
 from maoer_agent.research.sources import citation_context, current_citation_view
 from maoer_agent.tools.results import outcome_facts, RSS_STATISTIC_FIELDS
+from maoer_agent.research.updates import publication_time
 
 
 @dataclass(frozen=True)
@@ -36,15 +38,20 @@ class PreparedContext:
 class ContextAssembler:
     def answer(self, request: AnswerInput):
         names = {d['function']['name'] for d in request.tools}
-        base = [{'role': 'system', 'content': build_system(names, request.extended_episodes,
+        system = build_system(names, request.extended_episodes,
                     request.research, request.final_only,
-                    request.route.get('response_needs', {}).get('app_guidance', True))}, *request.messages[1:]]
+                    request.route.get('response_needs', {}).get('app_guidance', True))
+        if introduction_ready(request.route, request.messages):
+            system = EPISODE_INTRODUCTION + '\n当前可调用工具：' + (', '.join(sorted(names)) or '无')
+        base = [{'role': 'system', 'content': system}, *request.messages[1:]]
         messages = model_messages(base, request.memory)
+        messages = publication_view(messages)
         if request.research:
             messages = current_citation_view(messages)
-            messages = evidence_view(messages, request.route.get('response_needs', {}).get('retrieval_statistics', True))
+            needs = request.route.get('response_needs', {})
+            messages = evidence_view(messages, needs.get('retrieval_statistics', True), needs.get('titles_only', False))
         messages = with_summary(messages, request.summary, request.summary_pending > 0)
-        messages = model_instructions(messages, request.messages, request.model, request.final_only)
+        messages = model_instructions(messages, request.messages, request.model, request.final_only, request.route)
         if request.route.get('response_needs', {}).get('retrieval_statistics'):
             messages.insert(1, {'role': 'system', 'content': '项目RSS检索工具的统计字段定义：\n' +
                 '\n'.join(name + '：' + meaning for name, meaning in RSS_STATISTIC_FIELDS.items())})
@@ -82,7 +89,44 @@ class ContextAssembler:
         return repair
 
 
-def evidence_view(messages, retrieval_statistics):
+def introduction_ready(route, messages):
+    """Use a focused answer purpose only after one episode was actually read."""
+    needs = route.get('response_needs', {})
+    if (not needs.get('brief_episode_intro') or route.get('control_actions') or route.get('web')
+            or route.get('library') or route.get('page_lookup', {}).get('requested')
+            or any(needs.get(k) for k in ('app_guidance', 'retrieval_statistics', 'library_listing'))):
+        return False
+    calls, episodes = {}, set()
+    for message in last_turn(messages):
+        for call in message.get('tool_calls') or []:
+            calls[call['id']] = call['function']['name']
+        if message['role'] == 'tool' and calls.get(message['tool_call_id']) == 'read_episode_description':
+            result = json.loads(message['content'])
+            if result.get('status') != 'ok':
+                return False
+            episodes.update(item['id'] for item in result.get('items', [])
+                            if item.get('kind') == 'episode' and item.get('id') and item.get('evidence'))
+    return len(episodes) == 1
+
+
+def publication_view(messages):
+    """Normalize dates in the model view only; signed/raw receipts remain intact."""
+    view = []
+    for message in messages:
+        if message['role'] == 'tool':
+            result = json.loads(message['content'])
+            for item in result.get('items', []):
+                stamp = publication_time(item.get('published', ''))
+                if stamp is not None:
+                    item['published_display'] = datetime.fromtimestamp(stamp, timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M 北京时间')
+                if item.get('evidence_field') == 'RSS分集说明' and 'evidence_truncated' in item:
+                    item['returned_text_window_truncated'] = item.pop('evidence_truncated')
+            message = {**message, 'content': json.dumps(result, ensure_ascii=False)}
+        view.append(message)
+    return view
+
+
+def evidence_view(messages, retrieval_statistics, titles_only=False):
     """Project tool evidence for the answer; stored receipts and excerpts stay intact."""
     calls, view = {}, []
     diagnostics = ('retrieval_scope', 'description_count', 'matched_episodes', 'match_count_kind',
@@ -91,14 +135,22 @@ def evidence_view(messages, retrieval_statistics):
     for message in messages:
         for call in message.get('tool_calls') or []:
             calls[call['id']] = call['function']['name']
-        if message['role'] == 'tool' and calls.get(message['tool_call_id']) == 'search_rss' and not retrieval_statistics:
+        if message['role'] == 'tool' and calls.get(message['tool_call_id']) == 'search_rss':
             result = json.loads(message['content'])
             if result.get('status') == 'ok':
-                result = {k: v for k, v in result.items() if k not in diagnostics}
+                if not retrieval_statistics:
+                    result = {k: v for k, v in result.items() if k not in diagnostics}
+                literal = result.get('literal_filter')
+                if literal and not retrieval_statistics:
+                    result['literal_filter'] = {k: v for k, v in literal.items() if k not in ('scope', 'conclusion_scope')}
                 for item in result.get('items', []):
                     checks = item.get('description_checks')
-                    if checks:
+                    if checks and not retrieval_statistics:
                         item['description_checks'] = {k: v for k, v in checks.items() if k not in ('audio_checked', 'synonyms_checked')}
+                    if titles_only and len(item.get('evidence') or '') > 400:
+                        item['evidence'] = item['evidence'][:400]
+                        item['context_excerpt_only'] = True
+                        item['returned_text_window_truncated'] = True
                 message = {**message, 'content': json.dumps(result, ensure_ascii=False)}
         view.append(message)
     return view

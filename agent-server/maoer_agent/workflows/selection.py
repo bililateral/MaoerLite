@@ -5,10 +5,17 @@ import re
 from maoer_agent.contracts.errors import ModelFailure
 from maoer_agent.memory.history import last_turn, PLAYBACK_SNAPSHOT_TOOLS
 from maoer_agent.workflows.episode_pages import observations
+from maoer_agent.context.route import episode_pages
 
 
 def normalize_selector(lookup, message):
     """Apply the product's explicit numeric catalog grammar, not topic routing."""
+    # A relative release is not an absolute catalog ordinal inferred by the router.
+    # Keep the actual historical list available to the semantic planner instead.
+    if (re.search(r'(?:上|前|下|后)一[期集]', message)
+            and not re.search(r'(?:第|期号|原始列表)\s*[零一二三四五六七八九十百千0-9]+', message)
+            and lookup.get('selector_kind') in ('reverse_source', 'source', 'newest', 'title_number')):
+        lookup = {**lookup, 'selector_kind': 'none', 'selector_value': 0}
     title_query = re.fullmatch(r'(?:请\s*)?(?:帮我\s*)?(?:查询|查找|找|查)\s*《(?P<podcast>[^》]{1,150})》'
         r'标题(?:包含|含)[“「"](?P<title>[^”」"]{1,100})[”」"](?:的)?(?:那集|分集)'
         r'(?:[，,。；;]\s*(?:先别播放|不要播放|不播放|先列出来让我选))*[。.!！]?', message.strip())
@@ -46,6 +53,22 @@ def selection_step(route, messages, names):
     kind, number = lookup.get('selector_kind', 'none'), lookup.get('selector_value', 0)
     if lookup.get('target_kind') != 'episode_selection' or kind == 'none' or not number:
         return None
+    if kind == 'displayed_page':
+        page = next((p for p in episode_pages(messages) if p['reference'] == lookup.get('page_reference')), None)
+        if not page or number > len(page['items']):
+            return None  # Missing/ambiguous display context must be clarified by the model.
+        item = page['items'][number - 1]
+        current = observations(last_turn(messages))
+        if route.get('response_needs', {}).get('brief_episode_intro'):
+            args = {'podcast_id': item['podcast_id'], 'episode_id': item['id'], 'offset': 0}
+            if 'read_episode_description' in names and not any(c['name'] == 'read_episode_description' and c['arguments'] == args for c, _ in current):
+                return {'kind': 'call', 'name': 'read_episode_description', 'arguments': args}
+            return None
+        if lookup.get('exclusive') and not route.get('control_actions'):
+            return {'kind': 'selection', 'title': lookup.get('podcast_title', ''), 'selector_kind': kind,
+                    'number': number, 'titles_only': route.get('response_needs', {}).get('titles_only', False),
+                    'result': {'status': 'ok', 'items': [item]}}
+        return None
     title = lookup.get('podcast_title', '').strip()
     if not title:
         return None
@@ -64,7 +87,8 @@ def selection_step(route, messages, names):
     for call, result in current:
         if call['name'] == 'list_episodes' and call['arguments'] == args:
             if lookup.get('exclusive'):
-                return {'kind': 'selection', 'title': title, 'selector_kind': kind, 'number': number, 'result': result}
+                return {'kind': 'selection', 'title': title, 'selector_kind': kind, 'number': number, 'result': result,
+                        'titles_only': route.get('response_needs', {}).get('titles_only', False)}
             return None
     if 'list_episodes' in names:
         return {'kind': 'call', 'name': 'list_episodes', 'arguments': args}

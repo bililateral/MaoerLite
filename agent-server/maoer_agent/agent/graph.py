@@ -24,7 +24,7 @@ from maoer_agent.contracts.execution import ResearchContext, PageView
 from maoer_agent.core.limits import MAX_MODEL_ATTEMPTS
 from maoer_agent.workflows import episode_pages
 from maoer_agent.workflows.recommendations import criteria_call
-from maoer_agent.workflows.recovery import recovery_scope
+from maoer_agent.workflows.recovery import recovery_scope, recovered_selection_reply
 from maoer_agent.workflows.query_replies import reply_step, library_reply_step
 
 
@@ -178,7 +178,8 @@ class AgentGraph:
                 try:
                     verdict = await self.invoke_model(run_id, 'page_identity',
                         replace(self.settings, agent_thinking=False),
-                        episode_pages.match_messages(state['route']['page_lookup'], step['item']), [], discard)
+                        episode_pages.match_messages(state['route']['page_lookup'], step['item'],
+                            step.get('publisher_transcript_link', False)), [], discard)
                     matched = episode_pages.parse_match(verdict)
                 except (ValueError, TypeError, KeyError, AttributeError):
                     raise ModelFailure('invalid_page_identity') from None
@@ -218,7 +219,8 @@ class AgentGraph:
         names = {d['function']['name'] for d in available}
         criteria = None if final_only else criteria_call(state.get('route', {}), state['messages'], names)
         selected = selection_step(state.get('route', {}), state['messages'], names) if state.get('extended_episodes') else None
-        direct = reply_step(state.get('route', {}), state['messages'], names)
+        direct = (recovered_selection_reply(state.get('route', {}), state['messages'])
+                  or reply_step(state.get('route', {}), state['messages'], names))
         if self.get_run(run_id).get('playback_refresh_pending') and not final_only:
             message = {'role': 'assistant', 'content': None, 'tool_calls': [{
                 'id': 'recovery_state_' + run_id + '_' + str(state.get('tool_count', 0)),

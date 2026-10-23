@@ -3,7 +3,7 @@ from maoer_agent.core.errors import error_message
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 from maoer_agent.research.store import digest
-from maoer_agent.core.urls import public_url
+from maoer_agent.core.urls import public_url, public_links
 from maoer_agent.contracts.execution import ResearchContext
 
 
@@ -38,8 +38,10 @@ class ResearchTools:
         url = args['url']
         # Only follow a result already returned to this run, or an exact URL the user supplied.
         known = {s.get('source_url') for s in context.sources}
-        question = context.question
-        if not public_url(url) or (url not in known and url not in question):
+        for source in context.sources:
+            known.update(public_links(source.get('evidence', '')))
+        known.update(public_links(context.question))
+        if not public_url(url) or url not in known:
             return {'status': 'error', 'code': 'web_url_not_allowed', 'note': error_message('web_url_not_allowed')}
         saved = next((s for s in context.sources if s.get('source_url') == url and s.get('document_id')), None)
         raw = self.store.read(saved['document_id']) if saved else ''

@@ -10,12 +10,22 @@ def reply_step(route, messages, names):
         return None
     if route.get('library'):
         return None
+    if (route.get('response_needs', {}).get('control_explanation') == 'cancel_sleep_timer'
+            and not route.get('podcast') and not route.get('web') and not route.get('device')):
+        return {'kind': 'cancel_timer_explanation'}
     request = route.get('unsupported_request', {})
     actions = request.get('actions', [])
     if actions and request.get('exclusive') and not set(actions) & names:
         return {'kind': 'unsupported', 'actions': list(dict.fromkeys(actions))}
     if actions:
         return None
+    if route.get('response_needs', {}).get('episode_page_listing'):
+        pages = [(c, r) for c, r in observations(last_turn(messages)) if c['name'] == 'list_episodes']
+        if len(pages) == 1 and pages[0][1].get('status') == 'ok':
+            call, result = pages[0]
+            if not call['arguments'].get('position') and not call['arguments'].get('episode_number'):
+                return {'kind': 'episode_page', 'result': result,
+                        'titles_only': route['response_needs'].get('titles_only', False)}
     if not route.get('response_needs', {}).get('brief_episode_intro'):
         return None
     items = {i['id']: i for c, r in observations(last_turn(messages))

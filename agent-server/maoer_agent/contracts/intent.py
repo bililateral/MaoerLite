@@ -12,6 +12,12 @@ class ControlIntent(BaseModel):
     actions: list[ControlAction] = Field(default_factory=list, max_length=MAX_TOOL_CALLS)
 
 
+class NetworkConstraint(BaseModel):
+    model_config = ConfigDict(strict=True, extra='forbid')
+    restriction: Literal['none', 'forbidden']
+    source_quote: str = Field(default='', max_length=300)
+
+
 class ResponseNeeds(BaseModel):
     model_config = ConfigDict(strict=True, extra='forbid')
     app_guidance: bool = False
@@ -19,6 +25,9 @@ class ResponseNeeds(BaseModel):
     brief_episode_intro: bool = False
     library_listing: bool = False
     last_library_page: bool = False
+    titles_only: bool = False
+    episode_page_listing: bool = False
+    control_explanation: Literal['none', 'cancel_sleep_timer'] = 'none'
 
 
 class UnsupportedRequest(BaseModel):
@@ -30,14 +39,15 @@ class UnsupportedRequest(BaseModel):
 class PageLookup(BaseModel):
     model_config = ConfigDict(strict=True, extra='forbid')
     requested: bool = False
-    target_kind: Literal['episode_page', 'podcast_homepage', 'evidence_quote', 'episode_selection', 'none'] = 'episode_page'
-    selector_kind: Literal['none', 'reverse_source', 'source', 'newest', 'title_number'] = 'none'
+    target_kind: Literal['episode_page', 'episode_transcript', 'podcast_homepage', 'evidence_quote', 'episode_selection', 'none'] = 'episode_page'
+    selector_kind: Literal['none', 'reverse_source', 'source', 'newest', 'title_number', 'displayed_page'] = 'none'
     selector_value: int = Field(default=0, ge=0, le=100000)
+    page_reference: str = Field(default='', max_length=40)
     exclusive: bool = False
     podcast_title: str = Field(default='', max_length=150)
     episode_title: str = Field(default='', max_length=300)
     query: str = Field(default='', max_length=300)
-    other_tasks: list[str] = Field(default_factory=list, max_length=8)
+    other_tasks: list[Literal['episode_analysis', 'recommendation', 'other_web_query', 'general_question']] = Field(default_factory=list, max_length=8)
 
 
 class EpisodeCriteria(BaseModel):

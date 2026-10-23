@@ -1,6 +1,7 @@
 """Public-source URL classification shared by readers and workflows."""
 from ipaddress import ip_address
 from urllib.parse import urlsplit
+import re
 
 
 def public_url(value):
@@ -14,3 +15,9 @@ def public_url(value):
         except ValueError: return True
     except ValueError:
         return False
+
+
+def public_links(text):
+    """Exact public URLs present in retrieved text, without guessing paths."""
+    return {url for match in re.finditer(r'https?://[^\s<>\[\]()]+', text or '')
+            if public_url(url := match[0].rstrip('。，；'))}

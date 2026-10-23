@@ -34,6 +34,8 @@ internal class PlaybackStateReader(private val repository: PodcastRepository, pr
         put("queue_scope", "当前播放器队列，按当前筛选和排序计数。RSS总集数通过节目目录查询。queue_position从1开始，0表示未在队列中找到。")
         put("sleep_remaining_ms", player.sleepTimer.value.remainingMs)
         put("sleep_end_of_episode", player.sleepTimer.value.endOfEpisode)
+        put("sleep_timer_clock", "elapsed_realtime")
+        put("sleep_timer_counts_while_paused", true)
         put("playback_error", player.playbackError.value.orEmpty())
         put("download_available", source?.let { JsonPrimitive(it.downloadAllowed) } ?: JsonNull)
         put("download_available_sources", repository.sources.count { it.downloadAllowed })

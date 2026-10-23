@@ -19,7 +19,7 @@ def page_reply(step):
     data = step['presentation']
     subject = f"《{_text(data['title'])}》"
     homepage = data.get('target_kind') == 'podcast_homepage'
-    page_name = '节目主页' if homepage else '独立网页'
+    page_name = '节目主页' if homepage else '完整文稿网页' if data.get('target_kind') == 'episode_transcript' else '独立网页'
     if status == 'ambiguous':
         candidates = data['candidates']
         if data['candidate_kind'] == 'podcast':
@@ -29,7 +29,9 @@ def page_reply(step):
             for n, i in enumerate(candidates, 1))
     if status == 'found':
         number = data.get('citation')
-        return f"{subject}的{page_name}：{_link(data['url'], '打开节目主页' if homepage else '打开分集网页')}。" + (f'[{number}]' if number else '')
+        if data.get('publisher_transcript_link'):
+            return f"{subject}节目方在RSS中标注的完整文稿链接：{_link(data['url'], '打开文稿页面')}。" + (f'[{number}]' if number else '')
+        return f"{subject}的{page_name}：{_link(data['url'], '打开' + page_name)}。" + (f'[{number}]' if number else '')
     if status == 'budget_exhausted':
         verb = '核实' if data.get('verification') else '取得'
         return f'本次查询额度已用完，未能{verb}{subject}的{page_name}链接。'
@@ -49,11 +51,13 @@ def selection_reply(step):
     if result.get('status') != 'ok':
         return result.get('note') or '分集查询失败。'
     label = {'reverse_source': '原始列表倒数第', 'source': '原始列表第',
-             'newest': '按发布时间排序第', 'title_number': '标题期号第'}[step['selector_kind']]
+             'newest': '按发布时间排序第', 'title_number': '标题期号第', 'displayed_page': '该页第'}[step['selector_kind']]
     target = f"《{_text(step['title'])}》{label}{step['number']}"
     items = result.get('items', [])
     if not items:
         return f'未找到{target}的分集。'
+    if step.get('titles_only'):
+        return '\n'.join(_text(item['title']) for item in items)
     rows = []
     for n, item in enumerate(items, 1):
         duration = item.get('duration_seconds', 0)
@@ -68,6 +72,30 @@ def selection_reply(step):
 
 
 def query_reply(step):
+    if step['kind'] == 'cancel_timer_explanation':
+        return ('取消睡眠定时会取消按分钟倒计时或“本集结束”定时，不改变当前播放或暂停状态。'
+                '取消后不会因原定时自动停止；播放队列仍按原规则首尾循环。')
+    if step['kind'] == 'recovered_selection':
+        current = step['current']
+        state = '正在播放' if current.get('playing') else '正在加载' if current.get('buffering') else '已暂停'
+        return f"已切换到《{_text(current.get('title', ''))}》，当前{state}。"
+    if step['kind'] == 'episode_page':
+        result = step['result']
+        items = result.get('items', [])
+        if not items:
+            return '本页没有分集。'
+        rows = []
+        for number, item in enumerate(items, 1):
+            row = f"{number}. **{_text(item['title'])}**"
+            if not step.get('titles_only'):
+                stamp = publication_time(item.get('published', ''))
+                if stamp is not None:
+                    row += ' · ' + datetime.fromtimestamp(stamp, timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M 北京时间')
+                if item.get('duration_seconds', 0) > 0:
+                    row += f" · {item['duration_seconds'] // 60}分{item['duration_seconds'] % 60}秒"
+            rows.append(row)
+        head = '' if step.get('titles_only') else f"第{result.get('offset', 0) + 1}–{result.get('offset', 0) + len(items)}条：\n\n"
+        return head + '\n'.join(rows) + ('\n\n还有后续分集。' if result.get('has_more') and not step.get('titles_only') else '')
     if step['kind'] == 'library':
         return library_reply(step)
     if step['kind'] == 'unsupported':

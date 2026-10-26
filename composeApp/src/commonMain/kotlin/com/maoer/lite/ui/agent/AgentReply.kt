@@ -38,7 +38,7 @@ import org.intellij.markdown.parser.MarkdownParser
 internal fun AgentReply(content: String, modifier: Modifier = Modifier, citations: Set<Int> = emptySet(), onCitation: (Int) -> Unit = {}) {
     val original = LocalUriHandler.current
     val rendered = remember(content, citations) {
-        replyCitationLinks(content, citations)
+        replyCitationLinks(replyAutolinks(content), citations)
     }
     val handler = object : UriHandler {
         override fun openUri(uri: String) {
@@ -63,6 +63,33 @@ internal fun AgentReply(content: String, modifier: Modifier = Modifier, citation
     }
 }
 
+/** GFM accepts CJK prose punctuation inside bare URLs; keep that prose outside the link. */
+internal fun replyAutolinks(content: String): String {
+    val tree = MarkdownParser(GFMFlavourDescriptor()).buildMarkdownTreeFromString(content)
+    val replacements = mutableListOf<Pair<IntRange, String>>()
+    val literalTypes = setOf(MarkdownElementTypes.CODE_SPAN, MarkdownElementTypes.CODE_FENCE,
+        MarkdownElementTypes.CODE_BLOCK, MarkdownElementTypes.INLINE_LINK,
+        MarkdownElementTypes.FULL_REFERENCE_LINK, MarkdownElementTypes.LINK_DEFINITION,
+        MarkdownElementTypes.IMAGE, MarkdownElementTypes.AUTOLINK)
+    fun collect(node: ASTNode) {
+        if (node.type in literalTypes) return
+        if (node.type == GFMTokenTypes.GFM_AUTOLINK) {
+            val text = node.getTextInNode(content).toString()
+            if (text.startsWith("https://") || text.startsWith("http://")) {
+                val end = text.indexOfFirst { it in "，。！？；：、（）【】《》「」『』〈〉〔〕｛｝“”‘’" }
+                if (end > text.indexOf("://") + 3) {
+                    replacements += (node.startOffset until node.endOffset) to
+                        ("<" + text.take(end) + ">" + text.drop(end))
+                }
+            }
+        } else node.children.forEach(::collect)
+    }
+    collect(tree)
+    return replacements.asReversed().fold(content) { text, (range, replacement) ->
+        text.replaceRange(range, replacement)
+    }
+}
+
 /** A citation is prose; code, existing links and images must retain their literal input. */
 internal fun replyCitationLinks(content: String, citations: Set<Int>): String {
     if (citations.isEmpty()) return content
@@ -79,9 +106,17 @@ internal fun replyCitationLinks(content: String, citations: Set<Int>): String {
     val literalTypes = setOf(MarkdownElementTypes.CODE_SPAN, MarkdownElementTypes.CODE_FENCE,
         MarkdownElementTypes.CODE_BLOCK, MarkdownElementTypes.INLINE_LINK,
         MarkdownElementTypes.FULL_REFERENCE_LINK, MarkdownElementTypes.LINK_DEFINITION,
-        MarkdownElementTypes.IMAGE, GFMTokenTypes.GFM_AUTOLINK)
+        MarkdownElementTypes.IMAGE, MarkdownElementTypes.AUTOLINK, GFMTokenTypes.GFM_AUTOLINK)
     fun collect(node: ASTNode) {
-        if (node.type in literalTypes || (node.type == MarkdownElementTypes.SHORT_REFERENCE_LINK && label(node) in definitions)) {
+        // Adjacent source numbers can be parsed as a Markdown full reference
+        // link ([label][reference]). Only a real definition owns that syntax;
+        // otherwise both valid source numbers remain independent citations.
+        val sourcePair = node.type == MarkdownElementTypes.FULL_REFERENCE_LINK &&
+            Regex("\\[\\d{1,3}\\][ \\t]*\\[\\d{1,3}\\]").matches(node.getTextInNode(content)) &&
+            Regex("\\[(\\d{1,3})\\]").findAll(node.getTextInNode(content)).all {
+                it.groupValues[1].toInt() in citations
+            } && node.children.none { it.type == MarkdownElementTypes.LINK_LABEL && label(it) in definitions }
+        if ((node.type in literalTypes && !sourcePair) || (node.type == MarkdownElementTypes.SHORT_REFERENCE_LINK && label(node) in definitions)) {
             protected += node.startOffset until node.endOffset
         } else node.children.forEach(::collect)
     }

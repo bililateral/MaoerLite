@@ -6,7 +6,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from maoer_agent.agent.tasks import AgentTasks
 from maoer_agent.model.client import generate
 from maoer_agent.model.embeddings import LocalEmbeddings
-from maoer_agent.model.relevance import ModelRelevanceJudge
+from maoer_agent.model.relevance import ModelRelevanceJudge, ModelWebRelevanceJudge
 from maoer_agent.storage.tasks import Store
 from maoer_agent.research.store import ResearchStore
 from maoer_agent.research.rss import RssResearch, CATALOG
@@ -32,7 +32,8 @@ async def task_service(settings, client, gate, path):
             services.push_async_callback(web.close)
             services.push_async_callback(rss.close)
             saver = await services.enter_async_context(AsyncSqliteSaver.from_conn_string(str(path) + '.checkpoints'))
-            research = ResearchTools(knowledge, rss, web)
+            research = ResearchTools(knowledge, rss, web,
+                ModelWebRelevanceJudge(settings.model, settings.context_budget_bytes))
             tasks = AgentTasks(settings, saver, store, partial(generate, client=client, gate=gate), research, CATALOG, page_reply, query_reply)
             services.push_async_callback(tasks.close)
             rss.start()

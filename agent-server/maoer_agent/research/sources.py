@@ -89,14 +89,54 @@ def citation_context(sources):
             '推测与一般知识不冒充资料结论。资料注明搜索摘要、网页正文或RSS说明及读取时间；按实际原文引用。\n' + '\n'.join(rows))
 
 
-def valid_citations(text, sources):
+def _citation_text(text):
     # Code, Markdown links/images and escaped brackets are ordinary content,
     # not citation syntax. In particular, do not treat arrays as bad citations.
     text = re.sub(r'```[\s\S]*?```|~~~[\s\S]*?~~~|(`+)[^`\n]*?\1', '', text or '')
     text = re.sub(r'!?\[[^\]\n]*\]\([^\n]*?\)|\\\[', '', text)
+    return text
+
+
+def citation_numbers(text):
+    return [int(n) for n in re.findall(r'(?<!\!)\[(\d+)\](?!\()', _citation_text(text))]
+
+
+def valid_citations(text, sources):
+    text = _citation_text(text)
     labels = r'回执|检索结果|统计|资料|来源|引用|参考文献|\b(?:sources?|citations?|refs?|references?)\b'
     for bracket in re.findall(r'(?<!!)\[([^\]\n]+)\]', text):
         if re.search(r'\d', bracket) and re.search(labels, bracket, re.IGNORECASE):
             return False  # Regenerate against real sources; never relink it blindly.
     allowed = {str(s['number']) for s in sources}
     return all(n in allowed for n in re.findall(r'(?<!\!)\[(\d+)\](?!\()', text))
+
+
+def canonical_citations(text, numbers):
+    """Normalize an unambiguous bound citation, retaining literal Markdown."""
+    protected=[m.span() for m in re.finditer(r'```[\s\S]*?```|~~~[\s\S]*?~~~|(`+)[^`\n]*?\1',text)]
+    brackets=[];index=0
+    while index<len(text):
+        literal=next((end for start,end in protected if start<=index<end),None)
+        if literal is not None:
+            index=literal;continue
+        if text[index]=='\\':
+            index+=2;continue
+        if text[index]=='[':brackets.append(index)
+        elif text[index]==']' and brackets:
+            start=brackets.pop()
+            if text[index+1:index+2]=='(':
+                end=index+2;depth=1
+                while end<len(text) and text[end]!='\n':
+                    if text[end]=='\\':end+=2;continue
+                    if text[end]=='(':depth+=1
+                    elif text[end]==')':
+                        depth-=1
+                        if depth==0:break
+                    end+=1
+                if depth==0:
+                    protected.append((start,end+1));index=end+1;continue
+        index+=1
+    def replace(match):
+        if int(match[1]) not in numbers or any(match.start()<end and match.end()>start for start,end in protected):return match[0]
+        return '['+match[1]+']'
+    return re.sub(r'(?<![!\[\\])\[\[(\d{1,3})\]\](?![\](])',replace,text)

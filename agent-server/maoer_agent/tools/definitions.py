@@ -44,9 +44,10 @@ class Empty(StrictModel):
 
 class ResearchSearch(StrictModel):
     query: str = Field(min_length=2, max_length=300)
+    mode: Literal['semantic', 'literal'] = Field(default='semantic', description='semantic按主题相关性筛选；literal只按完整已存RSS说明的required_terms/excluded_terms逐条字面筛选，不经过语义相关性排序，适用于指定词的全量枚举。')
     podcast_id: str = Field(default='', max_length=150)
     max_duration_seconds: int = Field(default=0, ge=0, description='实际分集时长上限，单位秒；0不限。按RSS时长元数据筛选，未知时长不进入限时候选。')
-    offset: int = Field(default=0, ge=0, le=100000, description='相关性排序后从0开始的分集偏移量；每页最多12条。续页保持查询和筛选条件相同，使用返回的next_offset；改变条件从0开始。')
+    offset: int = Field(default=0, ge=0, le=100000, description='当前mode排序后从0开始的分集偏移量；每页最多12条。续页保持查询和筛选条件相同，使用返回的next_offset；改变条件从0开始。')
     required_terms: list[str] = Field(default_factory=list, max_length=8, description='可选全文字面筛选：分集说明必须包含每个词，不是语义匹配。')
     excluded_terms: list[str] = Field(default_factory=list, max_length=8, description='可选全文字面排除：说明含任一词即排除；说明截断的分集排除出候选；筛选对象为RSS文字。')
 
@@ -60,6 +61,7 @@ class ResearchSearch(StrictModel):
 
 class WebSearch(StrictModel):
     query: str = Field(min_length=2, max_length=300)
+    delivery: Literal['answer', 'results'] = Field(default='answer', description='answer用于查证后回答，运行时继续读取候选正文；results只交付搜索结果或摘要，不自动读取正文。')
 
 
 class RecentUpdates(StrictModel):
@@ -132,7 +134,7 @@ TOOLS = {
         'device', 'library', 'library', capability='library_read_v1'),
     'web_search': ToolSpec(WebSearch, '搜索公开互联网以核实最新外部信息。使用免费搜索额度。返回摘要及真实网址；关键事实应继续read_web_page读取原文。不是播客检索。', 'server', 'web', 'web', changes_state=False, capability='research_v3', retry='reserved_credit', retention='document'),
     'read_web_page': ToolSpec(WebRead, '读取本轮已取得资料中的准确公开链接或用户提供的公开网页正文。包括RSS说明中的链接。query可定位文中词，offset按字符分页；只有实际返回原文能作为引用依据。', 'server', 'web', 'web', changes_state=False, capability='research_v3', retry='reserved_credit', retention='document'),
-    'search_rss': ToolSpec(ResearchSearch, '播客RSS说明语义+关键词检索，每页最多12个不同分集，按相关性排序。has_more为true时用next_offset续页，保持query、podcast_id和筛选条件一致；改变条件从offset=0重新查询。required_terms/excluded_terms在完整已存说明上做字面包含/排除筛选。返回候选总数、展示数和逐项全文检查；检索对象为发布方提供的RSS文字。', 'server', 'podcast', 'episode', changes_state=False, capability='research_v3', retry='explicit_read', retention='document'),
+    'search_rss': ToolSpec(ResearchSearch, '播客RSS说明查询，每页最多12个不同分集。mode=semantic按相关性筛选排序；mode=literal按指定字面条件逐条筛选全部已存说明，不做语义裁减，按RSS源顺序分页。has_more为true时用next_offset续页，保持query、podcast_id和筛选条件一致；改变条件从offset=0重新查询。required_terms/excluded_terms在完整已存说明上做字面包含/排除筛选。返回候选总数、展示数和逐项全文检查；检索对象为发布方提供的RSS文字。', 'server', 'podcast', 'episode', changes_state=False, capability='research_v3', retry='explicit_read', retention='document'),
     'read_episode_description': ToolSpec(EpisodeRead, '按已查询的真实节目/分集ID读取RSS说明，offset分页，每次最多4000字符。has_more=true时还有RSS文字可继续读取。', 'server', 'podcast', 'episode', changes_state=False, capability='research_v3', retry='explicit_read', retention='document'),
     'search_catalog': ToolSpec(Search, '搜索本机真实播客目录，支持中文、分类、全拼和拼音首字母。返回最多8个候选，total是总命中，returned/omitted标明实际展示和省略数量；has_more为true时需缩小关键词，不把前8项当全部。多个匹配时请用户选择。', 'device', 'podcast', 'podcast', changes_state=False, capability='', retry='explicit_read', retention='receipt'),
     'list_episodes': ToolSpec(Episodes, '查询真实RSS分集，每页最多8项，offset分页。query仅匹配标题文字；episode_number精确匹配标题开头期号；position选择指定order完整列表的第N条(从1起)，与标题期号不同。position/episode_number/query不能混用，position时offset必须0。order=newest按时间倒序，source按节目页原始顺序，reverse_source按节目页倒序。feed_total是总条目数，不是最大期号；零匹配仅说明本次条件无匹配。仅latest_verified=true能确定最新一期。', 'device', 'podcast', 'episode', changes_state=False, capability='', retry='explicit_read', retention='receipt'),

@@ -9,7 +9,8 @@ from maoer_agent.memory.history import last_turn
 
 def active(route):
     lookup = route.get('page_lookup', {})
-    return (lookup.get('requested') and lookup.get('exclusive')
+    return (lookup.get('requested') and lookup.get('exclusive') and not route.get('control_actions')
+            and not route.get('library') and not route.get('unsupported_request',{}).get('actions')
             and lookup.get('target_kind', 'episode_page') in ('episode_page', 'episode_transcript', 'podcast_homepage')
             and bool(lookup.get('query', '').strip()))
 

@@ -1,5 +1,7 @@
 """Route projection for model input."""
 import json
+import re
+from maoer_agent.tools.results import catalog_page_chain, catalog_page_view
 from datetime import datetime, timezone, timedelta
 
 
@@ -22,9 +24,74 @@ def episode_pages(messages):
     return pages[-4:]
 
 
-def conversation_view(messages):
+def displayed_episode_pages(messages):
+    """Bind numbered lists actually shown in replies to unique observed IDs."""
+    end=max((i for i,m in enumerate(messages) if m['role']=='user'),default=len(messages))
+    episodes={};podcasts={};pages=[];calls={};observed=[]
+    for message in messages[:end]:
+        calls.update((c['id'],c['function']) for c in message.get('tool_calls',[]))
+        if message['role']=='tool':
+            if message.get('tool_call_id') not in calls:continue
+            result=json.loads(message['content'])
+            if result.get('status')!='ok':continue
+            call=calls[message['tool_call_id']]
+            args=json.loads(call['arguments'])
+            if call['name']=='list_episodes' and not args.get('position') and not args.get('episode_number'):
+                observed.append({'call_id':message['tool_call_id'],'arguments':args,'result':result})
+            for item in result.get('items',[]):
+                if item.get('kind')=='podcast':podcasts[item['id']]=item.get('title','')
+                if item.get('kind')=='episode' and item.get('id') and item.get('podcast_id'):
+                    episodes[(item['podcast_id'],item['id'])]=item
+        if message['role']!='assistant' or not message.get('content'):continue
+        rows=[];previous=None;invalid=False
+        def save():
+            if not rows or invalid:return
+            ids={r['podcast_id'] for r in rows}
+            page={'reference':'display'+str(len(pages)+1),'items':list(rows),
+                'podcast_title':podcasts.get(next(iter(ids)),'') if len(ids)==1 else ''}
+            # A delivered contiguous prefix carries its own end cursor, even
+            # when it uses only part of a receipt or spans multiple receipts.
+            identities=[(r['podcast_id'],r['id']) for r in rows]
+            origin=None
+            for candidate in reversed(observed):
+                view=catalog_page_view(catalog_page_chain(observed,candidate['arguments']),len(rows))
+                if view and identities==[(i.get('podcast_id'),i.get('id')) for i in view['result']['items']]:
+                    origin=view;break
+            if origin:
+                page['query']={k:origin[k] for k in ('call_id','arguments')}
+                page['query'].update({k:origin['result'][k] for k in ('offset','has_more','next_offset') if k in origin['result']})
+            pages.append(page)
+        for line in message['content'].splitlines():
+            match=re.match(r'^\s*(\d+)[.)、]\s*(.+)',line)
+            if not match:continue
+            ordinal=int(match[1]);text=match[2].replace('**','')
+            matches=[e for e in episodes.values() if e.get('title') and e['title'] in text]
+            if previous is not None and ordinal!=previous+1:save();rows=[];invalid=False
+            if len(matches)!=1:invalid=True;previous=ordinal;continue
+            rows.append({k:matches[0][k] for k in ('id','title','podcast_id')});previous=ordinal
+        save()
+    return pages[-4:]
+
+
+def episode_page_state(messages):
+    """Separate delivered history from this task's observations, including drafts."""
+    end=max((i for i,m in enumerate(messages) if m['role']=='user'),default=len(messages))
+    calls={};current=[]
+    for message in messages[end:]:
+        calls.update((c['id'],c['function']) for c in message.get('tool_calls',[]))
+        call=calls.get(message.get('tool_call_id'))
+        if message['role']=='tool' and call and call['name']=='list_episodes':
+            result=json.loads(message['content'])
+            current.append({'call_id':message['tool_call_id'],'arguments':json.loads(call['arguments']),
+                **{k:result[k] for k in ('status','offset','returned','has_more','next_offset') if k in result}})
+    return {'displayed_pages':displayed_episode_pages(messages),'current_queries':current}
+
+
+def conversation_view(messages, *, history_only=False):
+    end=max((i for i,m in enumerate(messages) if m['role']=='user'),default=len(messages))
+    conversation=messages[:end] if history_only else messages
     recent = [{'role': m['role'], 'content': (m.get('content') or '')[:2000]}
-              for m in messages if m['role'] in ('user', 'assistant') and m.get('content')][-8:]
+              for m in conversation if m['role'] in ('user', 'assistant') and m.get('content')][-8:]
     materials = {}
     for message in messages:
         if message['role'] != 'tool':
@@ -35,7 +102,7 @@ def conversation_view(messages):
             materials[key] = {k: item[k] for k in ('kind', 'id', 'title', 'podcast_id', 'podcast_title',
                 'source_url', 'evidence_field', 'document_id', 'offset') if k in item}
     return {'conversation': recent, 'known_materials': list(materials.values())[-12:],
-            'episode_pages': episode_pages(messages)}
+            'episode_pages': episode_pages(messages),'displayed_episode_pages':displayed_episode_pages(messages)}
 
 
 def instructions(route):

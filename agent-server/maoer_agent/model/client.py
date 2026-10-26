@@ -11,12 +11,13 @@ from maoer_agent.model.provider import request_body, open_response, response_fai
 from maoer_agent.model.rate_limit import Throttle
 from maoer_agent.model.transport import sse_data, TOTAL_TIMEOUT
 from maoer_agent.model.failures import timeout_kind
-from maoer_agent.core.limits import MAX_AGENT_MESSAGES, MAX_BATCH_CALLS
+from maoer_agent.core.limits import (MAX_AGENT_MESSAGES, MAX_BATCH_CALLS, AGENT_OUTPUT_TOKENS,
+                                    AGENT_THINKING_OUTPUT_TOKENS, MAX_AGENT_REASONING_CHARS)
 
 
 class AgentMessage(Message):
     # Kept only in server checkpoints/history; never streamed to the device.
-    reasoning_content: str | None = Field(default=None, max_length=64000, repr=False)
+    reasoning_content: str | None = Field(default=None, max_length=MAX_AGENT_REASONING_CHARS, repr=False)
 
     @model_validator(mode='after')
     def reasoning_role(self):
@@ -28,17 +29,18 @@ class AgentMessage(Message):
 class AgentChatRequest(ConversationRequest):
     # Sequential tool rounds plus bounded history and the final answer.
     messages: list[AgentMessage] = Field(min_length=1, max_length=MAX_AGENT_MESSAGES)
-    max_tokens: int = Field(default=4096, ge=1, le=8192)
+    max_tokens: int = Field(default=AGENT_OUTPUT_TOKENS, ge=1, le=AGENT_THINKING_OUTPUT_TOKENS)
 
 
 async def generate(settings, messages, tools, publish, *, client, gate):
     try:
         payload = AgentChatRequest.model_validate({'messages': messages, 'tools': tools or None,
                                                   'tool_choice': 'auto' if tools else None,
-                                                  'stream': True, 'max_tokens': 8192 if settings.agent_thinking else 4096})
+                                                  'stream': True, 'max_tokens': AGENT_THINKING_OUTPUT_TOKENS if settings.agent_thinking else AGENT_OUTPUT_TOKENS})
     except ValueError:
         raise ModelFailure('invalid_model_request') from None
-    body = request_body(payload, settings, agent=True)
+    body = request_body(payload, settings, agent=True,
+                        output_format=getattr(messages, 'output_format', 'text'))
     refusal = gate.enter()
     if isinstance(refusal, Throttle):
         raise ModelFailure(refusal.code, refusal.retryable, refusal.retry_after)
@@ -50,16 +52,17 @@ async def generate(settings, messages, tools, publish, *, client, gate):
     first_data = None
     headers_at = None
     last_data = started
+    finish = None
     def details():
         return {'elapsed_ms': round((time.monotonic() - started) * 1000),
                 'headers_ms': None if headers_at is None else round((headers_at - started) * 1000),
                 'first_data_ms': None if first_data is None else round((first_data - started) * 1000),
                 'idle_ms': round((time.monotonic() - last_data) * 1000),
                 'response_stage': 'answer' if text else 'tool_call' if calls else 'reasoning' if reasoning else 'waiting',
-                'total_limit_seconds': TOTAL_TIMEOUT}
+                'total_limit_seconds': TOTAL_TIMEOUT, 'finish_reason': finish}
     try:
         async def read():
-            nonlocal response, text, reasoning, headers_at, first_data, last_data
+            nonlocal response, text, reasoning, headers_at, first_data, last_data, finish
             response = await open_response(client, settings, body)
             headers_at = time.monotonic()
             failure = await response_failure(response, gate)
@@ -67,7 +70,6 @@ async def generate(settings, messages, tools, publish, *, client, gate):
                 raise ModelFailure(failure.code, failure.retryable, failure.retry_after)
             if failure:
                 raise ModelFailure(failure, details={'http_status': response.status_code})
-            finish = None
             async for raw in sse_data(response, started + TOTAL_TIMEOUT):
                 last_data = time.monotonic()
                 if first_data is None: first_data = last_data
@@ -88,7 +90,7 @@ async def generate(settings, messages, tools, publish, *, client, gate):
                     finish = choice.get('finish_reason') or finish
                     delta = choice.get('delta', {})
                     reasoning += delta.get('reasoning_content') or ''
-                    if len(reasoning) > 64000:
+                    if len(reasoning) > MAX_AGENT_REASONING_CHARS:
                         raise ModelFailure('model_response_too_large')
                     text += delta.get('content') or ''
                     if len(text) > 16000:

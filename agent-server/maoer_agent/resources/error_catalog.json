@@ -61,6 +61,7 @@
   "incomplete_model_response": "模型未完整生成回答或工具计划。可重试当前步骤。",
   "model_response_too_large": "模型输出超过当前处理上限，请缩小问题范围后再试。",
   "invalid_model_response": "模型返回的数据格式无法解析，可重试当前步骤。",
+  "answer_review_failed": "回答未通过事实校核。",
   "invalid_model_request": "助手组装的模型请求未通过格式或长度校验，请反馈此问题以检查服务端。",
   "server_storage_error": "助手服务器保存任务记录失败，请检查服务器磁盘及数据库。",
   "task_busy": "当前任务仍在执行，请等待或停止后再试。",

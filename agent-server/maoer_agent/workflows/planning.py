@@ -10,8 +10,6 @@ from maoer_agent.contracts.errors import ModelFailure
 def tool_scope(route, capabilities, extended, research, final_only):
     available = definitions(extended, research, capabilities)
     allowed = allowed_tools(route) if research else {d['function']['name'] for d in available}
-    if any(d['function']['name'] == 'query_library' for d in available):
-        allowed.add('query_library')
     return ([] if final_only else [d for d in available if d['function']['name'] in allowed]), allowed
 
 

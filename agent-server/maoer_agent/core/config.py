@@ -4,6 +4,7 @@ from pathlib import Path
 from ipaddress import ip_address
 import secrets
 from urllib.parse import urlsplit
+from maoer_agent.core.limits import DEFAULT_CONTEXT_BUDGET_BYTES
 
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_MODEL = 'deepseek-flash'
@@ -25,7 +26,7 @@ class Settings:
     model_requests_per_minute: int = 0
     tavily_key: str = field(default='', repr=False)
     web_monthly_limit: int = 950
-    context_budget_bytes: int = 240000
+    context_budget_bytes: int = DEFAULT_CONTEXT_BUDGET_BYTES
     model_source_ipv4: str = ''
     model_dns_ipv4: str = ''
     model_temperature: float | None = None
@@ -73,7 +74,7 @@ def load_settings(path: Path = ROOT / '.local/agent.env') -> Settings:
         if address and (ip_address(address).version != 4 or ip_address(address).is_unspecified
                         or ip_address(address).is_multicast):
             raise ValueError('Invalid model network IPv4 address')
-    budget = int(values.get('AGENT_CONTEXT_BUDGET_BYTES', '240000'))
+    budget = int(values.get('AGENT_CONTEXT_BUDGET_BYTES', str(DEFAULT_CONTEXT_BUDGET_BYTES)))
     if not 64000 <= budget <= 4000000:
         raise ValueError('Invalid AGENT_CONTEXT_BUDGET_BYTES')
     port = int(values.get('AGENT_PORT', '8787'))

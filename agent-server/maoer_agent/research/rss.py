@@ -158,7 +158,7 @@ class RssResearch:
                     pass  # Query response reports actual vector coverage.
             await asyncio.sleep(3600)
 
-    async def search(self, query, podcast_id='', required_terms=None, excluded_terms=None, offset=0, max_duration_seconds=0, *, relevance_model=None):
+    async def search(self, query, podcast_id='', required_terms=None, excluded_terms=None, offset=0, max_duration_seconds=0, mode='semantic', *, relevance_model=None):
         required_terms, excluded_terms = required_terms or [], excluded_terms or []
         sources = [s for s in CATALOG if not podcast_id or s['id'] == podcast_id]
         if not sources: return {'status': 'error', 'code': 'rss_podcast_missing', 'note': error_message('rss_podcast_missing')}
@@ -187,6 +187,9 @@ class RssResearch:
              'descriptions_complete': sum(not r['description_truncated'] for r in rows)}
             for term in dict.fromkeys(required_terms + excluded_terms)
         ]
+        if mode == 'literal':
+            result = self.literal_result(rows, checks, sources, feeds, failures, offset, max_duration_seconds)
+            return self.statistics(result, sources, feeds, required_terms, excluded_terms, literal_counts)
         entries = list(self.entries(rows))
         vectors = self.store.vectors([e[0] for e in entries])
         vector = None
@@ -281,6 +284,42 @@ class RssResearch:
             result['duration_filter'] = {'max_duration_seconds': max_duration_seconds,
                 'unknown_episodes': sum(r.get('duration_seconds', 0) <= 0 for r in rows),
                 'eligible_episodes': sum(0 < r.get('duration_seconds', 0) <= max_duration_seconds for r in rows)}
+        return self.statistics(result, sources, feeds, required_terms, excluded_terms, literal_counts)
+
+    def literal_result(self, rows, checks, sources, feeds, failures, offset, max_duration_seconds):
+        # Whole descriptions determine membership; passage ranking has no role.
+        eligible = [row for row in rows if checks[row['id']]['passes'] and
+                    (not max_duration_seconds or 0 < row.get('duration_seconds', 0) <= max_duration_seconds)]
+        timestamps = {row['id']: fetched for fetched, group in feeds for row in group}
+        items = []
+        for row in eligible[offset:offset + RSS_SEARCH_PAGE_SIZE]:
+            terms = checks[row['id']]['required_terms']
+            location = next((row['description'].casefold().find(term.casefold()) for term in terms), 0)
+            start = max(0, location - 100)
+            item = self.evidence(row, row['description'][start:start + 1500], start, timestamps[row['id']])
+            item['description_checks'] = checks[row['id']]
+            items.append(item)
+        complete = not failures and len(sources) == sum(bool(group) for _, group in feeds) and not any(row['description_truncated'] for row in rows)
+        return {'status': 'ok', 'mode': 'literal', 'retrieval_scope': 'exhaustive_stored_description_literal_findings',
+            'snapshot': digest(json.dumps(rows, ensure_ascii=False, sort_keys=True)),
+            'match_count_kind': 'literal_findings', 'items': items, 'matched_episodes': len(eligible),
+            'returned': len(items), 'offset': offset, 'has_more': offset + len(items) < len(eligible),
+            'next_offset': offset + len(items), 'omitted': max(0, len(eligible) - offset - len(items)),
+            'coverage_available': sum(bool(group) for _, group in feeds), 'coverage_total': len(sources),
+            'description_count': len(rows), 'failures': failures, 'exhaustive': complete, 'audio_analyzed': False,
+            'literal_filter': {'required_terms': next(iter(checks.values()), {}).get('required_terms', []),
+                'excluded_terms': next(iter(checks.values()), {}).get('excluded_terms', []),
+                'operator': 'all_required_and_none_excluded', 'evaluated_descriptions': len(rows),
+                'eligible_descriptions': sum(check['passes'] for check in checks.values()),
+                'incomplete_descriptions': sum(row['description_truncated'] for row in rows),
+                'scope': 'stored_RSS_descriptions_only_not_audio_or_synonyms'}}
+
+    def statistics(self, result, sources, feeds, required_terms, excluded_terms, literal_counts):
+        rows = [row for _, group in feeds for row in group]
+        if result.get('mode') == 'literal':
+            result['literal_filter'].update(required_terms=required_terms, excluded_terms=excluded_terms)
+        matched_episodes = result['matched_episodes']
+        items = result['items']
         if required_terms or excluded_terms:
             label = sources[0]['title'] if len(sources) == 1 else '所查询节目'
             lines = [f'{label}：已存RSS说明字面检查',

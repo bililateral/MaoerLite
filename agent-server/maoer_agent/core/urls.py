@@ -21,3 +21,23 @@ def public_links(text):
     """Exact public URLs present in retrieved text, without guessing paths."""
     return {url for match in re.finditer(r'https?://[^\s<>\[\]()]+', text or '')
             if public_url(url := match[0].rstrip('。，；'))}
+
+
+def known_public_url(value, known):
+    """Keep an authoritative URL intact when a model omitted its query.
+
+    Only a unique already-observed URL at the exact same origin/path can be
+    recovered. Never discard or invent query values, paths or source identity.
+    """
+    if not public_url(value):
+        return None
+    if value in known:
+        return value
+    parsed = urlsplit(value)
+    if parsed.query or parsed.fragment:
+        return None
+    matches = {url for url in known if public_url(url)
+               and (candidate := urlsplit(url)).query
+               and (candidate.scheme, candidate.netloc, candidate.path, candidate.fragment)
+               == (parsed.scheme, parsed.netloc, parsed.path, '')}
+    return next(iter(matches)) if len(matches) == 1 else None

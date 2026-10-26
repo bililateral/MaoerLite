@@ -2,7 +2,7 @@
 from copy import deepcopy
 import json
 from maoer_agent.contracts.errors import ModelFailure
-from maoer_agent.core.limits import MAX_AGENT_MESSAGES, MAX_TOOL_MESSAGE_CHARS
+from maoer_agent.core.limits import MAX_AGENT_MESSAGES, MAX_TOOL_MESSAGE_CHARS, DEFAULT_CONTEXT_BUDGET_BYTES
 
 
 def size(messages, tools, output_tokens):
@@ -10,7 +10,7 @@ def size(messages, tools, output_tokens):
     return len(json.dumps({'messages': messages, 'tools': tools}, ensure_ascii=False).encode('utf-8')) + output_tokens * 4
 
 
-def fit_context(messages, tools, limit=240000, output_tokens=4096):
+def fit_context(messages, tools, limit=DEFAULT_CONTEXT_BUDGET_BYTES, output_tokens=4096):
     view = deepcopy(messages)
     before = size(view, tools, output_tokens)
     removed = 0

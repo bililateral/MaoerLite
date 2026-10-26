@@ -9,6 +9,10 @@ class ResearchContext:
     question: str
     sources: tuple[dict, ...]
     relevance_model: RelevanceCall | None = None
+    as_of_date: str = ''
+    known_urls: tuple[str, ...] = ()
+    web_relevance_model: RelevanceCall | None = None
+    information_request: str = ''
 
 
 @dataclass(frozen=True)

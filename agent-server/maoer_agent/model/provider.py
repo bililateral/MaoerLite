@@ -5,10 +5,12 @@ from maoer_agent.model.transport import limited_upstream
 from maoer_agent.model.rate_limit import upstream_failure_code
 
 
-def request_body(payload, settings, *, agent=False):
+def request_body(payload, settings, *, agent=False, output_format='text'):
     if payload.model is not None and payload.model != settings.model:
         raise ValueError('Only the configured model is enabled')
     body = {**payload.model_dump(exclude_none=True), 'model': settings.model}
+    if output_format == 'json_object':
+        body['response_format'] = {'type': 'json_object'}
     if urlsplit(settings.base_url).hostname == 'api.deepseek.com' or settings.model in (
         'deepseek-flash', 'deepseek-v4.1-flash',
     ):

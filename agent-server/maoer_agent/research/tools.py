@@ -3,14 +3,15 @@ from maoer_agent.core.errors import error_message
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 from maoer_agent.research.store import digest
-from maoer_agent.core.urls import public_url, public_links
+from maoer_agent.core.urls import public_url, public_links, known_public_url
 from maoer_agent.contracts.execution import ResearchContext
 
 
 
 class ResearchTools:
-    def __init__(self, store, rss, web):
+    def __init__(self, store, rss, web, web_relevance=None):
         self.store, self.rss, self.web = store, rss, web
+        self.web_relevance=web_relevance
 
     async def perform(self, call, context: ResearchContext):
         name, args = call['name'], call['arguments']
@@ -21,7 +22,11 @@ class ResearchTools:
         if name == 'read_episode_description': return await self.rss.read(**args)
         request_id = context.request_key
         if name == 'web_search':
-            result = await self.web.tavily('search', {'query': args['query'], 'search_depth': 'basic', 'max_results': 5,
+            query=args['query']
+            as_of=getattr(context,'as_of_date','')
+            if args.get('delivery','answer')!='results' and as_of and as_of not in query:
+                query += ' as of ' + as_of
+            result = await self.web.tavily('search', {'query': query, 'search_depth': 'basic', 'max_results': 5,
                                                 'include_answer': False, 'include_raw_content': False,
                                                 'auto_parameters': False}, request_id)
             if result.get('status') == 'error': return result
@@ -32,16 +37,32 @@ class ResearchTools:
                 items.append({'kind': 'web', 'id': digest(url), 'title': row.get('title', '')[:300],
                               'source_url': url, 'original_url': url, 'published': row.get('published_date') or '',
                               'evidence': row.get('content', '')[:1400], 'evidence_field': '网页搜索摘要（未读正文）',
+                              'evidence_level': 'search_summary',
                               'evidence_truncated': True, 'freshness': 'refreshed',
                               'fetched_at': int(datetime.now(timezone.utc).timestamp())})
-            return {'status': 'ok', 'items': items, 'note': '搜索摘要不是网页正文；核实关键事实时继续读取原网页。'}
+            candidates={}
+            if args.get('delivery')=='results' and self.web_relevance is not None and items:
+                original=items
+                documents=[{'id':str(i),'title':item['title'],'url':item['source_url'],'passages':[{'id':'search','text':item['evidence']}]} for i,item in enumerate(original)]
+                try:
+                    selection=await self.web_relevance.select(context.information_request or args['query'],documents,getattr(context,'web_relevance_model',None))
+                except ValueError as error:
+                    return {'status':'error','code':'invalid_model_response','note':error_message('invalid_model_response'),
+                        'stage':'web_relevance','reason':str(error)[:500],'items':[],'candidate_items':original}
+                items=[{**original[int(row['id'])],'search_match':{**row['match'],'query':args['query'],'request':context.information_request}} for row in selection.items]
+                candidates={'candidate_items':original,'relevance':{'candidate_count':len(original),'selected_count':len(items),'basis':'search_title_url_excerpt','rejected':selection.rejected}}
+                if not items and selection.rejected:
+                    return {'status':'error','code':'invalid_model_response','stage':'web_relevance','note':error_message('invalid_model_response'),'items':[],**candidates}
+            return {'status': 'ok', 'items': items, 'delivery': args.get('delivery', 'answer'), 'query_as_of':as_of, **candidates,
+                    'note': '搜索摘要不是网页正文；核实关键事实时继续读取原网页。'}
         url = args['url']
-        # Only follow a result already returned to this run, or an exact URL the user supplied.
-        known = {s.get('source_url') for s in context.sources}
+        # Prior real links are locators; only a new read supplies this turn's evidence.
+        known = {s.get('source_url') for s in context.sources} | set(getattr(context,'known_urls',()))
         for source in context.sources:
             known.update(public_links(source.get('evidence', '')))
         known.update(public_links(context.question))
-        if not public_url(url) or url not in known:
+        url = known_public_url(url, known)
+        if url is None:
             return {'status': 'error', 'code': 'web_url_not_allowed', 'note': error_message('web_url_not_allowed')}
         saved = next((s for s in context.sources if s.get('source_url') == url and s.get('document_id')), None)
         raw = self.store.read(saved['document_id']) if saved else ''
@@ -66,6 +87,7 @@ class ResearchTools:
         return {'status': 'ok', 'items': [{'kind': 'web', 'id': digest(url), 'title': title,
                     'source_url': url, 'original_url': url, 'evidence': excerpt,
                     'evidence_field': '网页正文节选', 'evidence_truncated': len(raw) > len(excerpt),
+                    'evidence_level': 'page_excerpt',
                     'document_id': document_id, 'description_truncated': len(raw) > 200000 or bool(saved and saved.get('description_truncated')),
                     'offset': offset, 'freshness': 'cached' if saved else 'refreshed',
                     'fetched_at': saved['fetched_at'] if saved else int(datetime.now(timezone.utc).timestamp())}],

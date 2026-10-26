@@ -1,7 +1,11 @@
 """Presentation of fixed page-lookup results, independent of workflow decisions."""
 from urllib.parse import quote
 from datetime import datetime, timezone, timedelta
+import re
+import json
 from maoer_agent.research.updates import publication_time
+from maoer_agent.research.sources import citation_numbers,canonical_citations
+from maoer_agent.core.urls import public_links
 
 
 def _text(value):
@@ -55,6 +59,8 @@ def selection_reply(step):
     target = f"《{_text(step['title'])}》{label}{step['number']}"
     items = result.get('items', [])
     if not items:
+        if step['selector_kind'] in ('reverse_source','source','newest') and type(result.get('feed_total')) is int and step['number']>result['feed_total']:
+            return f"{target}超出本次RSS列表范围（共{result['feed_total']}条）。"
         return f'未找到{target}的分集。'
     if step.get('titles_only'):
         return '\n'.join(_text(item['title']) for item in items)
@@ -72,6 +78,117 @@ def selection_reply(step):
 
 
 def query_reply(step):
+    if step['kind']=='literal_titles':
+        return ('\n'.join(f"{n}. **{_text(item['title'])}**[{item['citation']}]" for n,item in enumerate(step['items'],1))
+                if step['items'] else '未找到符合字面条件的分集。')
+    if step['kind']=='waiting_selection':
+        rows=[]
+        if step['receipts']:rows.append(query_reply({'kind':'control_receipts','receipts':step['receipts'],'unsupported':[]}))
+        rows.append(query_reply({'kind':'episode_page','result':step['result'],'titles_only':False}))
+        rows.append(step['question'])
+        return '\n\n'.join(rows)
+    if step['kind']=='duration_candidates':
+        rows=[]
+        for n,item in enumerate(step['items'],1):
+            seconds=item['duration_seconds']
+            rows.append(f"{n}. **{_text(item['title'])}** · {seconds//60}分{seconds%60}秒[{item['citation']}]")
+        return '\n'.join(rows)
+    if step['kind']=='selection_clarification':
+        done=query_reply({'kind':'control_receipts','receipts':step['receipts']}) if step['receipts'] else ''
+        return (done+'\n' if done else '')+'你指的是哪个节目或哪份列表中的条目？请提供节目或分集名称。'
+    if step['kind']=='acknowledgement':return '已记下。'
+    if step['kind']=='control_receipts':
+        rows=[]
+        actions={'play_episode':'播放','pause_playback':'暂停','resume_playback':'继续播放',
+            'previous_episode':'切换上一集','next_episode':'切换下一集','set_playback_speed':'调整倍速','set_sleep_timer':'设置定时'}
+        for receipt in step['receipts']:
+            name=receipt['name'];result=receipt['result'];args=receipt['arguments'];action=actions[name]
+            status=result.get('status','unknown')
+            if result.get('executed') is False:text=action+'未执行。'
+            elif status!='ok':
+                text=action+('失败。' if status=='error' else '结果无法确认。')
+                if result.get('note'):text+=result['note']
+            elif name=='set_playback_speed':text=f"已调整为{result['playback_speed']:g}倍速。"
+            elif name=='set_sleep_timer':
+                minutes=args['minutes']
+                text='已取消睡眠定时。' if minutes==0 else '已设置本集结束后停止。' if minutes==-1 else f'已设置{minutes}分钟睡眠定时。'
+            elif name in ('play_episode','previous_episode','next_episode'):
+                text={'play_episode':'已开始播放','previous_episode':'已切换上一集并播放','next_episode':'已切换下一集并播放'}[name]
+                text+=('《'+_text(result['title'])+'》' if result.get('title') else '')+'。'
+            else:text='已'+action+'。'
+            if result.get('observation_scope')=='execution_before_process_restart':text='进程重启前的执行结果：'+text
+            rows.append(text)
+        if step.get('unsupported'):rows.append(query_reply({'kind':'unsupported','actions':step['unsupported']}))
+        return '\n'.join(rows)
+    if step['kind']=='unsupported_setting':
+        if step['name']=='set_playback_speed':return f"不支持{step['arguments']['speed']:g}倍速。"
+        return f"睡眠定时不支持{step['arguments']['minutes']}分钟。"
+    if step['kind'] == 'execution_facts':
+        result = step['result']
+        operation = {'play_episode': '播放分集', 'pause_playback': '暂停', 'resume_playback': '继续播放',
+            'previous_episode': '上一集', 'next_episode': '下一集', 'set_playback_speed': '调整倍速',
+            'set_sleep_timer': '设置或取消定时'}[step['name']]
+        status = result.get('status', 'unknown')
+        facts = {'操作': operation, '结果': {'ok': '已完成', 'error': '失败', 'unknown': '无法确认',
+            'accepted': '已接收，效果尚未确认', 'confirmation_required': '待用户确认，未执行'}.get(status, '无法确认')}
+        if result.get('executed') is False:
+            facts['结果'] = '未执行'
+        if result.get('note'):
+            facts['说明'] = result['note']
+        if result.get('observation_scope') == 'execution_before_process_restart':
+            facts['观察阶段'] = '进程重启前的执行结果，当前状态另看最新观察'
+        return json.dumps(facts, ensure_ascii=False)
+    if step['kind'] == 'playback_facts':
+        result = step['result']
+        status = result.get('status', 'unknown')
+        if status != 'ok':
+            return json.dumps({'查询结果': '查询失败' if status == 'error' else '无法确认',
+                               '原因': result.get('note', '')}, ensure_ascii=False)
+        state = result.get('playback_state')
+        if not state and type(result.get('playing')) is bool:
+            state = 'playing' if result['playing'] else 'buffering' if result.get('buffering') else 'paused'
+        facts = {'播放状态': {'playing': '播放中', 'paused': '暂停', 'buffering': '缓冲中', 'idle': '未选中分集'}.get(state, '无法确认')}
+        labels = {'title': '当前选中分集', 'podcast_title': '所属节目',
+            'playback_speed': '倍速', 'queue_size': '当前队列总数',
+            'queue_position': '当前队列序号（从1开始，0表示未在队列中）',
+            'sleep_end_of_episode': '本集结束停止', 'sleep_timer_counts_while_paused': '暂停时定时继续计时',
+            'playback_error': '播放错误', 'download_available': '当前节目允许下载',
+            'download_available_sources': '允许下载的节目数'}
+        facts.update({label: result[key] for key, label in labels.items() if key in result})
+        for key, label in (('position_ms', '播放位置'), ('duration_ms', '总时长'), ('sleep_remaining_ms', '定时剩余')):
+            if type(result.get(key)) is int and result[key] >= 0:
+                seconds = result[key] // 1000
+                facts[label] = f'{seconds // 60}分{seconds % 60}秒'
+        return json.dumps(facts, ensure_ascii=False)
+    if step['kind'] == 'factual_answer':
+        rows = []
+        for block in step['blocks']:
+            text = canonical_citations(block['text'],set(block['sources']))
+            # Search-result links identify their own source exactly. Bind those
+            # citations at the link, before any later independent task result.
+            if step.get('link_sources'):
+                for source in step.get('sources', []):
+                    number, url = source['number'], source.get('source_url', '')
+                    if number not in block['sources'] or number in citation_numbers(text) or not url:
+                        continue
+                    match = re.search(re.escape(url) + r'(?=\s|$)', text)
+                    if match:
+                        text = text[:match.end()] + f' [{number}]' + text[match.end():]
+            suffix = re.search(r'(?:\[\d{1,3}\])+$', text)
+            existing = [int(n) for n in re.findall(r'\[(\d+)\]', suffix[0])] if suffix else []
+            cited = set(citation_numbers(text))
+            numbers = list(dict.fromkeys(existing + [n for n in block['sources'] if n not in cited]))
+            rows.append((text[:suffix.start()] if suffix else text) + ''.join(f'[{number}]' for number in numbers))
+        if step.get('include_source_links'):
+            cited={n for block in step['blocks'] for n in block['sources']}
+            linked=set(public_links('\n\n'.join(rows)))
+            for source in step.get('sources', []):
+                url=source.get('source_url','')
+                if source['number'] in cited and source.get('kind')=='web' and url and url not in linked:
+                    rows.append(f"{url} [{source['number']}]")
+                    linked.add(url)
+        if step.get('question'):rows.append(step['question'])
+        return '\n\n'.join(rows)
     if step['kind'] == 'cancel_timer_explanation':
         return ('取消睡眠定时会取消按分钟倒计时或“本集结束”定时，不改变当前播放或暂停状态。'
                 '取消后不会因原定时自动停止；播放队列仍按原规则首尾循环。')
@@ -115,9 +232,13 @@ def query_reply(step):
 
 
 def library_reply(step):
+    if step.get('sections'):
+        return '\n\n'.join(library_reply(section) for section in step['sections'])
     pages = step['pages']
     items = [i for page in pages for i in page['items']]
-    name = {'continue': '继续收听', 'favorites': '收藏', 'history': '收听历史', 'downloads': '下载记录'}[pages[0]['tab']]
+    name = step.get('section_name') or {'continue': '继续收听', 'favorites': '收藏', 'history': '收听历史', 'downloads': '下载记录'}[pages[0]['tab']]
+    if step.get('completion'):
+        name+='中'+('已听完' if step['completion']=='completed' else '未听完')+'的分集'
     if not items:
         return name + '没有匹配记录。' if pages[0]['total'] == 0 else f'{name}共{pages[0]["total"]}条，本次查询页没有记录。'
     head = f'{name}共{pages[0]["total"]}条，本次展示{len(items)}条。'

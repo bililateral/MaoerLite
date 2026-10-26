@@ -59,7 +59,7 @@ object AgentScreen : Screen {
         val showAnswerStart by remember(lastTurnId, last?.status, replyIndex, jumpThreshold) {
             derivedStateOf {
                 val viewport = list.layoutInfo.viewportEndOffset - list.layoutInfo.viewportStartOffset
-                last?.status == "completed" && viewport > 0 && answerTextHeight > viewport &&
+                last?.status == "completed" && viewport > 0 &&
                     (list.firstVisibleItemIndex > replyIndex ||
                         (list.firstVisibleItemIndex == replyIndex && list.firstVisibleItemScrollOffset > jumpThreshold))
             }

@@ -5,11 +5,34 @@ import re
 from maoer_agent.contracts.errors import ModelFailure
 from maoer_agent.memory.history import last_turn, PLAYBACK_SNAPSHOT_TOOLS
 from maoer_agent.workflows.episode_pages import observations
-from maoer_agent.context.route import episode_pages
+from maoer_agent.context.route import episode_pages,displayed_episode_pages
 
 
-def normalize_selector(lookup, message):
+def normalize_selector(lookup, message, displayed_pages=()):
     """Apply the product's explicit numeric catalog grammar, not topic routing."""
+    explicit=re.search(r'作者|标题|期号|原始|RSS|\b(?:EP|Vol\.?|No\.?)\s*\d',message,re.IGNORECASE)
+    ordinal=re.search(r'第\s*([0-9]+|[零〇一二两三四五六七八九十百千]+)\s*[期条个集]',message)
+    if displayed_pages and ordinal and not explicit:
+        value=ordinal[1]
+        if value.isdecimal():number=int(value)
+        else:
+            digits=dict(zip('零〇一二两三四五六七八九',(0,0,1,2,2,3,4,5,6,7,8,9)))
+            number=part=0
+            for char in value:
+                if char in digits:part=digits[char]
+                else:number+=(part or 1)*{'十':10,'百':100,'千':1000}[char];part=0
+            number+=part
+        page=displayed_pages[-1]
+        if (number>0 and (not lookup.get('podcast_title') or lookup['podcast_title']==page.get('podcast_title'))):
+            item=page['items'][number-1] if number<=len(page['items']) else {}
+            return {**lookup,'target_kind':'episode_selection','requested':False,'selector_kind':'displayed_page',
+                'selector_value':number,'page_reference':page['reference'],'episode_title':item.get('title',''),
+                'query':item.get('title',''),'podcast_title':page.get('podcast_title','')},False
+    if (not displayed_pages and ordinal and not explicit and ordinal[0].endswith(('个','条'))
+            and not lookup.get('podcast_title') and not lookup.get('episode_title')):
+        # A bare display ordinal has no relationship to the current player queue.
+        return {**lookup,'target_kind':'episode_selection','selector_kind':'displayed_page',
+                'page_reference':'','selector_value':0},False
     # A relative release is not an absolute catalog ordinal inferred by the router.
     # Keep the actual historical list available to the semantic planner instead.
     if (re.search(r'(?:上|前|下|后)一[期集]', message)
@@ -54,7 +77,7 @@ def selection_step(route, messages, names):
     if lookup.get('target_kind') != 'episode_selection' or kind == 'none' or not number:
         return None
     if kind == 'displayed_page':
-        page = next((p for p in episode_pages(messages) if p['reference'] == lookup.get('page_reference')), None)
+        page = next((p for p in episode_pages(messages)+displayed_episode_pages(messages) if p['reference'] == lookup.get('page_reference')), None)
         if not page or number > len(page['items']):
             return None  # Missing/ambiguous display context must be clarified by the model.
         item = page['items'][number - 1]

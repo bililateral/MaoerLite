@@ -1,5 +1,6 @@
 """Bounded rolling summaries. Text is background, never authority for device IDs."""
 import json
+import re
 
 from maoer_agent.memory.history import encoded, task_turn
 
@@ -59,24 +60,51 @@ def summary_messages(previous, records):
             {'role': 'user', 'content': '请合并上述资料，返回约定的JSON。'}]
 
 
+class SummaryFormatError(ValueError):
+    def __init__(self, code):
+        self.code = code
+        super().__init__(code)
+
+
 def parse_summary(message):
     if message.get('tool_calls'):
-        raise ValueError('summary_has_tools')
+        raise SummaryFormatError('summary_has_tools')
     text = (message.get('content') or '').strip()
-    if text.startswith('```json\n') and text.endswith('```'):
-        text = text[8:-3].strip()
-    if len(text) > MAX_SUMMARY_CHARS:
-        raise ValueError('summary_too_large')
-    value = json.loads(text)
+    fence = re.fullmatch(r'```(?:json)?\s*([\s\S]*?)\s*```', text, re.IGNORECASE)
+    if fence:
+        text = fence[1]
+    try:
+        value = json.loads(text)
+    except (ValueError, TypeError):
+        raise SummaryFormatError('summary_invalid_json') from None
     if not isinstance(value, dict) or set(value) != set(FIELDS):
-        raise ValueError('summary_schema')
+        raise SummaryFormatError('summary_schema')
     for items in value.values():
         if (not isinstance(items, list) or len(items) > 8 or
                 any(not isinstance(s, str) or not s.strip() or len(s) > 400 for s in items)):
-            raise ValueError('summary_schema')
+            raise SummaryFormatError('summary_schema')
     if len(encoded(value)) > MAX_SUMMARY_CHARS:
-        raise ValueError('summary_too_large')
+        raise SummaryFormatError('summary_too_large')
     return value
+
+
+async def build_summary(model, previous, records):
+    """One format correction; transport failures keep their original semantics.
+
+    The cursor is owned by the caller and advances only after valid output.
+    Both attempts share the caller's normal timeout and model-call budget.
+    """
+    messages = summary_messages(previous, records)
+    for attempt in range(2):
+        reply = await model(messages)
+        try:
+            return parse_summary(reply)
+        except SummaryFormatError as error:
+            if attempt:
+                raise
+            messages = [messages[0], {'role': 'system', 'content':
+                '上次摘要未符合结构契约（' + error.code + '）。重新整理同一批数据，返回约定四组字符串数组；'
+                '每组最多8项，每项最多400字符，紧凑JSON最多4000字符。'}, *messages[1:]]
 
 
 def with_summary(messages, summary, incomplete=False):

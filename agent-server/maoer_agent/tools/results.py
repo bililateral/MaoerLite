@@ -16,6 +16,40 @@ RSS_STATISTIC_FIELDS = {
 }
 
 
+def catalog_page_chain(rows, target):
+    """Pair contiguous catalog receipts using their actual query and cursor."""
+    chain=[];cursor=dict(target);seen=set()
+    while cursor.get('offset',0) not in seen:
+        seen.add(cursor.get('offset',0))
+        row=next((r for r in reversed(rows) if r.get('tool','list_episodes')=='list_episodes'
+            and not r['arguments'].get('position') and not r['arguments'].get('episode_number')
+            and all(r['arguments'].get(k,0 if k in {'offset','position','episode_number'} else '')==v
+                    for k,v in cursor.items())),None)
+        if not row or row['result'].get('status')!='ok':break
+        chain.append(row);result=row['result']
+        if not result.get('has_more') or not result.get('items'):break
+        offset=result.get('next_offset')
+        if offset is None or offset<=cursor.get('offset',0):break
+        cursor={**row['arguments'],'offset':offset}
+    return chain
+
+
+def catalog_page_view(chain, count=0):
+    """Project a delivered prefix without changing the original device receipts."""
+    selected=[];items=[]
+    for row in chain:
+        selected.append(row);items.extend(row['result'].get('items',[]))
+        if not count or len(items)>=count:break
+    if not selected:return None
+    first=selected[0];last=selected[-1];shown=items[:count] if count else items
+    offset=first['arguments'].get('offset',0)
+    more=len(shown)<len(items) or bool(last['result'].get('has_more'))
+    next_offset=offset+len(shown) if len(shown)<len(items) else last['result'].get('next_offset',-1)
+    return {**first,'call_ids':[r['call_id'] for r in selected],
+        'result':{**first['result'],'items':shown,'offset':offset,'returned':len(shown),
+                  'has_more':more,'next_offset':next_offset}}
+
+
 class Item(BaseModel):
     model_config = ConfigDict(strict=True, extra='allow')
     kind: Literal['podcast', 'episode', 'web']
@@ -104,6 +138,19 @@ def checked_result(call, raw):
     except (ValidationError, ValueError, KeyError, TypeError):
         return {'status': 'unknown', 'code': 'tool_result_unverified',
                 'note': error_message('tool_result_unverified')}
+
+
+def receipt_evidence(messages):
+    """Actual paired call metadata and result, independent of runtime objects."""
+    import json
+    calls,rows={},[]
+    for message in messages:
+        for call in message.get('tool_calls') or []:
+            calls[call['id']]={'call_id':call['id'],'tool':call['function']['name'],
+                'arguments':json.loads(call['function']['arguments'])}
+        if message['role']=='tool' and message.get('tool_call_id') in calls:
+            rows.append({**calls[message['tool_call_id']],'result':json.loads(message['content'])})
+    return rows
 
 
 def outcome_facts(messages):

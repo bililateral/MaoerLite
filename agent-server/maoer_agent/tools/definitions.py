@@ -186,6 +186,17 @@ def validated_calls(message, extended_episodes=True):
         clean.append({'id': call['id'], 'name': name, 'arguments': args.model_dump()})
     return clean
 
+
+def same_arguments(name, actual, expected):
+    """Compare already validated calls with the tool's optional defaults applied.
+
+    Native model messages and old checkpoints can omit optional fields. This
+    projection leaves the original call, execution receipt and ID unchanged.
+    """
+    defaults = {key: field.default for key, field in TOOLS[name].input_model.model_fields.items()
+                if not field.is_required()}
+    return {**defaults, **actual} == {**defaults, **expected}
+
 SERVER_TOOLS = frozenset(name for name, spec in TOOLS.items() if spec.location == 'server')
 READ_ONLY = frozenset(name for name, spec in TOOLS.items() if spec.location == 'device' and not spec.changes_state)
 

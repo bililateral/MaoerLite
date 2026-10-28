@@ -3,6 +3,7 @@ import hashlib
 import json
 import re
 from maoer_agent.contracts.errors import ModelFailure
+from maoer_agent.tools.definitions import same_arguments
 from maoer_agent.memory.history import last_turn, PLAYBACK_SNAPSHOT_TOOLS
 from maoer_agent.workflows.episode_pages import observations
 from maoer_agent.context.route import episode_pages,displayed_episode_pages,displayed_selection
@@ -102,7 +103,7 @@ def selection_step(route, messages, names):
                 and (not lookup.get('podcast_title') or i.get('podcast_title')==lookup['podcast_title']))]
         if len(matches)==1 and 'read_episode_description' in names:
             item=matches[0];args={'podcast_id':item['podcast_id'],'episode_id':item['id'],'offset':0}
-            if not any(c['name']=='read_episode_description' and c['arguments']==args for c,_ in observations(last_turn(messages))):
+            if not any(c['name']=='read_episode_description' and same_arguments(c['name'],c['arguments'],args) for c,_ in observations(last_turn(messages))):
                 return {'kind':'call','name':'read_episode_description','arguments':args}
         return None
     kind, number = lookup.get('selector_kind', 'none'), lookup.get('selector_value', 0)
@@ -116,7 +117,7 @@ def selection_step(route, messages, names):
         current = observations(last_turn(messages))
         if route.get('response_needs', {}).get('brief_episode_intro'):
             args = {'podcast_id': item['podcast_id'], 'episode_id': item['id'], 'offset': 0}
-            if 'read_episode_description' in names and not any(c['name'] == 'read_episode_description' and c['arguments'] == args for c, _ in current):
+            if 'read_episode_description' in names and not any(c['name'] == 'read_episode_description' and same_arguments(c['name'],c['arguments'],args) for c, _ in current):
                 return {'kind': 'call', 'name': 'read_episode_description', 'arguments': args}
             return None
         if lookup.get('exclusive') and not route.get('control_actions'):
@@ -140,7 +141,7 @@ def selection_step(route, messages, names):
             'offset': 0, 'position': 0 if kind == 'title_number' else number,
             'episode_number': number if kind == 'title_number' else 0}
     for call, result in current:
-        if call['name'] == 'list_episodes' and call['arguments'] == args:
+        if call['name'] == 'list_episodes' and same_arguments(call['name'],call['arguments'],args):
             if lookup.get('exclusive'):
                 return {'kind': 'selection', 'title': title, 'selector_kind': kind, 'number': number, 'result': result,
                         'titles_only': route.get('response_needs', {}).get('titles_only', False)}

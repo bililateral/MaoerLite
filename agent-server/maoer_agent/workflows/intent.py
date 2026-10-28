@@ -119,6 +119,13 @@ hint只从提供的节目名/分类中选择一个与用户实际话题相关的
                 if len(candidates)==1:candidates[0]['target']=lookup
             for goal in plan['goals']:
                 if (goal.get('target') or {}).get('target_kind')=='episode_selection':goal['page_request']=None
+            if kind=='episode_selection' and len(plan['goals'])==1:
+                # Keep the user's wording beside the normalized selector. A
+                # router paraphrase must not reintroduce a different numbering
+                # scheme (for example, title numbers after position selection).
+                # request is a bounded goal preview; the full user message is
+                # still present in the conversation and model input.
+                plan['goals'][0]['request']=latest[:500]
             controls=[g['action'] for g in plan['goals'] if g['kind']=='control'] if plan['goals'] else controls
             title_constraints=[g['delivery']['titles_only'] for g in plan['goals'] if g['delivery']['titles_only'] is not None]
             if title_constraints:needs['titles_only']=all(title_constraints)

@@ -406,7 +406,11 @@ class AgentGraph:
         plan=task_goals.goals(state.get('route',{}))
         quote_selected=(state.get('route',{}).get('page_lookup',{}).get('target_kind')=='evidence_quote'
                         and not view['next_step'] and bool(self.answer_input(state,[],True).sources))
-        if quote_selected:
+        if (direct and direct['kind']=='control_receipts' and direct.get('receipts')
+                and not view['next_step']):
+            message={'role':'assistant','content':self.query_renderer(direct)}
+            messages=state['messages']
+        elif quote_selected:
             message=await self.quote_reply(state,available)
             messages=state['messages']
         else:

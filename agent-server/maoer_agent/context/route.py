@@ -113,15 +113,37 @@ def displayed_selection(lookup, pages):
 
 
 def known_materials(messages):
-    materials = {}
+    materials, calls = {}, {}
+    turn = 0
     for message in messages:
+        if message['role']=='user':turn+=1
+        calls.update((c['id'],c['function']) for c in message.get('tool_calls') or [])
         if message['role'] != 'tool':
             continue
         result = json.loads(message['content'])
-        for item in result.get('items') or []:
+        call_id=message.get('tool_call_id','')
+        call=calls.get(call_id,{})
+        for item in (result.get('items') or []) if result.get('status')=='ok' else []:
             key = (item.get('kind'), item.get('id'))
-            materials[key] = {k: item[k] for k in ('kind', 'id', 'title', 'podcast_id', 'podcast_title',
-                'source_url', 'evidence_field', 'document_id', 'offset') if k in item}
+            current = {k: item[k] for k in ('kind', 'id', 'title', 'podcast_id', 'podcast_title',
+                'source_url', 'evidence_field', 'evidence_level', 'document_id', 'offset',
+                'fetched_at', 'fetched_display', 'freshness') if k in item}
+            previous=materials.get(key,{})
+            observations=dict(previous.get('observations',{}))
+            if item.get('evidence_field'):
+                kind='body' if item.get('document_id') else 'summary'
+                observations[kind]={k:v for k,v in current.items() if k in {
+                    'evidence_field','evidence_level','document_id','offset','fetched_at','fetched_display','freshness'}}
+                observations[kind].update(call_id=call_id,tool=call.get('name',''),turn=turn)
+            # A later teaser is a separate observation, not a reversal of a read.
+            primary=previous if previous.get('document_id') and not current.get('document_id') else current
+            materials[key]={**primary,**({'observations':observations} if observations else {})}
+        if call.get('name')=='read_web_page':
+            url=json.loads(call['arguments']).get('url','')
+            for material in materials.values():
+                if material.get('source_url')==url:
+                    material['last_read_attempt']={'call_id':call_id,'turn':turn,'status':result.get('status','unknown')}
+                    if result.get('code'):material['last_read_attempt']['code']=result['code']
     return list(materials.values())[-12:]
 
 

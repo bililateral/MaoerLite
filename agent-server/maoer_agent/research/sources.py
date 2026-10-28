@@ -46,21 +46,27 @@ def annotate(run, result):
             item['fetched_display'] = datetime.fromtimestamp(item['fetched_at'], timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M 北京时间')
         if item.get('evidence') and item.get('source_url'):
             identity = '|'.join(str(item.get(k, '')) for k in ('kind', 'id', 'source_url'))
+            matching=[s for s in sources if all(s.get(k)==item.get(k) for k in ('kind','id','source_url'))]
+            document=item.get('document_id')
+            old=next((s for s in matching if s.get('document_id')==document),None)
+            if document and old is None and not any(s.get('document_id') for s in matching):
+                old=next(iter(matching),None)  # Upgrade the first search teaser in place.
             key = hashlib.sha256(identity.encode()).hexdigest()[:24]
-            old = next((s for s in sources if s['key'] == key), None)
+            if old is None and any(s.get('key')==key for s in sources):
+                key=hashlib.sha256((identity+'|'+(document or 'search_summary')).encode()).hexdigest()[:24]
             if old is None and len(sources) < 48:
                 old = {**item, 'key': key, 'number': len(sources) + 1}
                 sources.append(old)
             elif old:
                 previous = old.get('evidence', '')
                 incoming = item.get('evidence', '')
-                # A fetched body replaces its search teaser; successive RSS/body
-                # passages share one citation and remain available in the snapshot.
-                upgrade = bool(item.get('document_id')) and not old.get('document_id')
-                if upgrade or incoming not in previous:
-                    excerpt = incoming if upgrade else (previous + '\n…\n' + incoming)[:12000]
-                    old = {**old, **item, 'evidence': excerpt, 'key': key, 'number': old['number']}
-                    sources[old['number'] - 1] = old
+                # Only passages from the same document can share its body evidence.
+                # Teasers and other document versions keep separate sources.
+                same_document=bool(document) and document==old.get('document_id')
+                excerpt=previous if same_document and incoming in previous else (
+                    (previous+'\n…\n'+incoming)[:12000] if same_document else incoming)
+                old={**old,**item,'evidence':excerpt,'key':old['key'],'number':old['number']}
+                sources[old['number']-1]=old
             if old:
                 item['citation'] = old['number']
         items.append(item)

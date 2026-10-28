@@ -155,6 +155,11 @@ def close_failed_queries(route,progress,messages,names,sources):
         linked=[(c,r) for c,r in rows if c['id'] in p.get('call_ids',[]) and evidence_matches(goal,c['name'],route)]
         failures=[(c,r) for c,r in linked if r.get('status') in {'error','unknown'}]
         related=linked or [(c,r) for c,r in rows if evidence_matches(goal,c['name'],route)]
+        external=goal['kind'] in {'public_query','general'}
+        if (not related and external and information_evidence_required(goal,route)
+                and route.get('network_allowed') is False):
+            p.update(status='unavailable',reason='用户禁止联网，本轮没有可用的取证工具')
+            continue
         has_evidence=any(item.get('citation') in citable for c,r in related if r.get('status')=='ok'
                          for item in r.get('items',[]))
         own_failure=bool(failures)

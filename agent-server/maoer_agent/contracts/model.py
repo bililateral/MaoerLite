@@ -1,4 +1,8 @@
 """Internal model input requirements, independent of the provider HTTP protocol."""
+from contextvars import ContextVar
+
+
+model_call_context = ContextVar('model_call_context', default=None)
 
 
 class JsonMessages(list):

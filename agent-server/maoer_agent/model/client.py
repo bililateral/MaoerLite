@@ -5,7 +5,8 @@ import time
 import logging
 import httpx
 from maoer_agent.contracts.errors import ModelFailure
-from pydantic import Field, model_validator
+from maoer_agent.contracts.model import model_call_context
+from pydantic import Field, model_validator, ValidationError
 from maoer_agent.contracts.chat import ConversationRequest, Message
 from maoer_agent.model.provider import request_body, open_response, response_failure
 from maoer_agent.model.rate_limit import Throttle
@@ -37,8 +38,9 @@ async def generate(settings, messages, tools, publish, *, client, gate):
         payload = AgentChatRequest.model_validate({'messages': messages, 'tools': tools or None,
                                                   'tool_choice': 'auto' if tools else None,
                                                   'stream': True, 'max_tokens': AGENT_THINKING_OUTPUT_TOKENS if settings.agent_thinking else AGENT_OUTPUT_TOKENS})
-    except ValueError:
-        raise ModelFailure('invalid_model_request') from None
+    except ValidationError as error:
+        raise ModelFailure('invalid_model_request', details={'validation_errors':
+            error.errors(include_input=False, include_context=False, include_url=False)}) from None
     body = request_body(payload, settings, agent=True,
                         output_format=getattr(messages, 'output_format', 'text'))
     refusal = gate.enter()
@@ -53,16 +55,25 @@ async def generate(settings, messages, tools, publish, *, client, gate):
     headers_at = None
     last_data = started
     finish = None
+    first_reasoning = first_answer = None
+    events = 0
+    usage = {}
+    call_context = dict(model_call_context.get() or {})
     def details():
-        return {'elapsed_ms': round((time.monotonic() - started) * 1000),
+        return {**call_context, 'elapsed_ms': round((time.monotonic() - started) * 1000),
                 'headers_ms': None if headers_at is None else round((headers_at - started) * 1000),
                 'first_data_ms': None if first_data is None else round((first_data - started) * 1000),
                 'idle_ms': round((time.monotonic() - last_data) * 1000),
+                'first_reasoning_ms': None if first_reasoning is None else round((first_reasoning-started)*1000),
+                'first_answer_ms': None if first_answer is None else round((first_answer-started)*1000),
+                'reasoning_chars': len(reasoning), 'answer_chars': len(text), 'data_events': events,
+                'thinking': settings.agent_thinking, **usage,
                 'response_stage': 'answer' if text else 'tool_call' if calls else 'reasoning' if reasoning else 'waiting',
                 'total_limit_seconds': TOTAL_TIMEOUT, 'finish_reason': finish}
     try:
         async def read():
             nonlocal response, text, reasoning, headers_at, first_data, last_data, finish
+            nonlocal first_reasoning, first_answer, events, usage
             response = await open_response(client, settings, body)
             headers_at = time.monotonic()
             failure = await response_failure(response, gate)
@@ -84,11 +95,21 @@ async def generate(settings, messages, tools, publish, *, client, gate):
                         result['tool_calls'] = [calls[k] for k in sorted(calls)]
                     return result
                 data = json.loads(raw)
+                events += 1
+                reported = data.get('usage')
+                if not isinstance(reported,dict):reported={}
+                usage.update({k:reported[k] for k in ('prompt_tokens','completion_tokens','total_tokens')
+                              if type(reported.get(k)) is int})
+                completion_details=reported.get('completion_tokens_details')
+                reasoning_tokens=completion_details.get('reasoning_tokens') if isinstance(completion_details,dict) else None
+                if type(reasoning_tokens) is int:usage['reasoning_tokens']=reasoning_tokens
                 for choice in data.get('choices', []):
                     if choice.get('index', 0) != 0:
                         continue
                     finish = choice.get('finish_reason') or finish
                     delta = choice.get('delta', {})
+                    if delta.get('reasoning_content') and first_reasoning is None:first_reasoning=time.monotonic()
+                    if delta.get('content') and first_answer is None:first_answer=time.monotonic()
                     reasoning += delta.get('reasoning_content') or ''
                     if len(reasoning) > MAX_AGENT_REASONING_CHARS:
                         raise ModelFailure('model_response_too_large')

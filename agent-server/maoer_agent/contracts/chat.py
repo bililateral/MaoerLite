@@ -71,8 +71,6 @@ class ConversationRequest(StrictModel):
     def check_conversation(self):
         if not any(m.role == 'user' for m in self.messages):
             raise ValueError('User message required')
-        if self.messages[-1].role not in ('user', 'tool'):
-            raise ValueError('Conversation must end with user or tool results')
         pending, seen = set(), set()
         for message in self.messages:
             if message.role == 'tool':

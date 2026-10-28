@@ -1,11 +1,19 @@
 """Public gateway request validation and response projection."""
-from pydantic import Field
+from pydantic import Field, model_validator
 from maoer_agent.contracts.chat import ConversationRequest, Message
 
 
 class ChatRequest(ConversationRequest):
     messages: list[Message] = Field(min_length=1, max_length=40)
     max_tokens: int = Field(default=1024, ge=1, le=2048)
+
+    @model_validator(mode='after')
+    def check_request_turn(self):
+        # The public chat boundary requires a new user turn or tool results.
+        # Internal Agent continuations may instead end with runtime guidance.
+        if self.messages[-1].role not in ('user', 'tool'):
+            raise ValueError('Conversation must end with user or tool results')
+        return self
 
 
 def public_response(data: dict) -> dict:

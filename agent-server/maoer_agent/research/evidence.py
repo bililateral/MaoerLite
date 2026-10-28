@@ -34,7 +34,7 @@ def web_evidence(messages):
             'body_urls': list(dict.fromkeys(bodies)), 'network_stopped': blocked}
 
 
-def answer_sources(sources, messages, delivery='answer'):
+def answer_sources(sources, messages, delivery='answer', episode_id=''):
     """Keep search candidates separate from citable factual-answer evidence.
 
     Explicit search-result delivery retains snippet citations. This projection
@@ -42,6 +42,9 @@ def answer_sources(sources, messages, delivery='answer'):
     """
     if delivery=='results':
         return sources
+    if episode_id:
+        return [s for s in sources if s.get('kind') == 'episode' and s.get('id') == episode_id
+                and s.get('document_id') and s.get('evidence')]
     return [s for s in sources if s.get('kind') != 'web' or s.get('document_id')]
 
 

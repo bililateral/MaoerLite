@@ -1,5 +1,5 @@
 """Goal readiness and receipt bindings. No I/O, model calls or API dependencies."""
-from maoer_agent.contracts.intent import web_delivery, web_requirements, episode_description_required
+from maoer_agent.contracts.intent import web_delivery, episode_description_required
 from maoer_agent.workflows.introductions import description_items, description_call
 from copy import deepcopy
 from pydantic import ValidationError
@@ -7,8 +7,6 @@ from maoer_agent.tools.definitions import TOOLS
 from maoer_agent.tools.results import receipt_evidence
 from maoer_agent.memory.history import last_turn, podcast_identities
 from maoer_agent.workflows.episode_pages import active as page_workflow_active
-from datetime import datetime,timezone,timedelta
-from maoer_agent.core.urls import public_links
 from maoer_agent.workflows.pagination import observed_page, page_continuation
 from maoer_agent.context.route import displayed_selection, displayed_episode_pages
 
@@ -49,7 +47,7 @@ def observations(messages):
 def goals(route):
     if page_workflow_active(route):return []
     plan=route.get('task_plan',{}).get('goals',[])
-    if len(plan)==1 and plan[0]['kind']=='conversation_query':return plan
+    if len(plan)==1 and plan[0]['kind']!='general':return plan
     if route.get('page_lookup',{}).get('selector_kind')=='displayed_page' and not route.get('page_lookup',{}).get('page_reference'):
         return plan
     if len(plan)==1 and plan[0].get('page_request'):return plan
@@ -143,27 +141,6 @@ def evidence_matches(goal,name,route):
         scopes={scope for flag,scope in (('web','web'),('podcast','podcast'),('library','library')) if route.get(flag)}
         if scopes:return not TOOLS[name].changes_state and TOOLS[name].scope in scopes
     return matches(goal,name)
-
-
-def evidence_tools(route,progress,available):
-    """Supplementary reads serve ready, unfinished goals, not spare capabilities."""
-    plan=goals(route)
-    readonly=[d for d in available if not TOOLS[d['function']['name']].changes_state]
-    if not plan:return readonly
-    active=[g for g in plan if progress.get(g['id'],{}).get('status','pending') not in TERMINAL and ready(g,progress)]
-    return [d for d in readonly if any(evidence_matches(g,d['function']['name'],route) for g in active)]
-
-
-def lookup_goal(route,progress,lookup):
-    plan=goals(route)
-    if not plan:return lookup.goal_id
-    choices=[g for g in plan if progress.get(g['id'],{}).get('status','pending') not in TERMINAL
-             and ready(g,progress) and evidence_matches(g,lookup.name,route)]
-    if lookup.goal_id:
-        if not any(g['id']==lookup.goal_id for g in choices):raise ValueError('Lookup does not serve its unfinished goal')
-        return lookup.goal_id
-    if len(choices)!=1:raise ValueError('Lookup needs its matching unfinished goal_id')
-    return choices[0]['id']
 
 
 def close_failed_queries(route,progress,messages,names,sources):
@@ -309,92 +286,42 @@ def view(route,progress):
         'information_evidence_required':information_evidence_required(g,route)} for g in goals(route)]
 
 
-def reviewed(route,progress,assessments,sources,messages,allowed,blocks=None,memory_proofs=None):
-    plan=goals(route)
-    if not plan:return progress
-    assessments={a.id:a for a in assessments}
-    if set(assessments)!={g['id'] for g in plan if not progress.get(g['id'],{}).get('query_failure')}:
-        raise ValueError('Every remaining user goal needs an assessment')
-    result=deepcopy(progress);numbers={s['number'] for s in sources}
-    observed=observations(last_turn(messages))
-    calls={c['id']:r for c,r in observed}
-    information_reads={c['id'] for c,r in observed if r.get('status')=='ok'
-        and not TOOLS[c['name']].changes_state and TOOLS[c['name']].scope in {'web','podcast','library'}}
-    today=datetime.now(timezone(timedelta(hours=8))).date().isoformat()
-    for goal in plan:
-        if result[goal['id']].get('query_failure'):continue
-        p=result[goal['id']];a=assessments[goal['id']]
-        if any(n not in numbers for n in a.sources) or any(i not in calls for i in a.call_ids):
-            raise ValueError('Goal proof must reference actual current evidence')
-        if goal['kind'] in ('control','device_query'):
-            if a.status=='satisfied' and p['status']!='satisfied':raise ValueError('An assessment cannot invent execution')
-            if (a.status=='waiting' and p['status']=='pending' and ready(goal,result)
-                    and goal['kind']=='control' and parameter_state(goal)=='incomplete'):
-                p.update(status='waiting_user',reason=a.note or '需要用户补充控制参数')
-            continue
-        if p['status'] in TERMINAL:continue
-        if not ready(goal,result):
-            if a.status not in ('waiting','needs_evidence'):raise ValueError('A dependent goal cannot complete before its prerequisite')
-            continue
-        if a.status=='satisfied':
-            if goal['kind']=='conversation_query':
-                if not a.memory_ids or not set(a.memory_ids).issubset(memory_proofs or {}):
-                    raise ValueError('Conversation recall needs actual user statements or stored summary')
-            if goal.get('page_request') and not episode_description_required(route,goal) and not observed_page(goal,messages):
-                p.update(status='observed',reason='尚未取得用户目标页的匹配回执')
-                continue
-            if episode_description_required(route,goal):
-                body_numbers={item['citation'] for item in description_items(messages,p.get('call_ids',[]))}
-                delivered={n for block in (blocks or []) for n in block.get('sources',[])}
-                if not body_numbers.intersection(a.sources).intersection(delivered):
-                    p.update(status='observed',reason='分集介绍尚无对应RSS说明及交付引用',reviewed_calls=list(p.get('call_ids',[])))
-                    continue
-            if (goal['kind']=='public_query' and route.get('web_lookup',{}).get('requirements')
-                    and web_requirements(route)['factual_answer']):
-                delivered={n for b in (blocks or []) for n in b.get('sources',[])}
-                body_numbers={item.get('citation') for c,r in observed
-                    if c['name']=='read_web_page' and c['id'] in p.get('call_ids',[])
-                    and c['id'] in a.call_ids and r.get('status')=='ok'
-                    for item in r.get('items',[]) if item.get('document_id') and item.get('evidence')}
-                if not set(a.sources)&delivered&body_numbers:
-                    p.update(status='observed',reason='事实目标尚无对应正文回执及交付引用',reviewed_calls=list(p.get('call_ids',[])))
-                    continue
-            if web_delivery(route)=='results' and goal['kind'] in {'public_query','general'}:
-                required=max(1,goal.get('requested_results',0))
-                if required:
-                    delivered={n for b in (blocks or []) for n in b.get('sources',[])}
-                    matched={item.get('citation'):item.get('source_url') for c,r in observed
-                        if c['name']=='web_search' and c['id'] in p.get('call_ids',[]) and r.get('status')=='ok'
-                        for item in r.get('items',[]) if item.get('search_match',{}).get('relation') in {'primary','section'}}
-                    delivered_urls={matched[n] for n in set(a.sources)&delivered&set(matched)
-                        if any(n in b.get('sources',[]) and matched[n] in public_links(b.get('text','')) for b in (blocks or []))}
-                    if len(delivered_urls)<required:
-                        p.update(status='observed',reason=f'已交付合格搜索结果{len(delivered_urls)}条，用户要求{required}条',reviewed_calls=list(p.get('call_ids',[])))
-                        continue
-            if information_evidence_required(goal,route) and not (a.sources or information_reads.intersection(a.call_ids)):
-                raise ValueError('A current or query information goal needs actual information evidence; control/state receipts are not knowledge evidence')
-            local_reads={c['id'] for c,r in observed if r.get('status')=='ok'
-                and c['name'] in allowed and TOOLS[c['name']].scope in {'podcast','library'} and not TOOLS[c['name']].changes_state}
-            current_local_proof=bool(local_reads.intersection(a.call_ids).intersection(p.get('call_ids',[]))) and not route.get('web')
-            if (information_evidence_required(goal,route) and web_delivery(route)!='results'
-                    and goal['kind'] in ('public_query','general') and goal.get('as_of')=='current'
-                    and not current_local_proof and a.through_date!=today):
-                raise ValueError('Historical evidence does not complete a current-state goal')
-            p.update(status='satisfied',proof_calls=a.call_ids,source_ids=a.sources,memory_ids=a.memory_ids,reviewed_calls=list(p.get('call_ids',[])))
-        elif a.status=='needs_evidence':p['status']='observed'
-        elif a.status=='unavailable':
-            if goal['kind'] in QUERY_KINDS and any(matches(goal,name) for name in allowed) and not p.get('call_ids'):
-                raise ValueError('An unattempted authorized query is still pending')
-            if (goal['kind']=='public_query' and web_delivery(route)!='results' and goal.get('as_of')=='current'
-                    and allowed & {'web_search','read_web_page'} and a.through_date!=today):
-                raise ValueError('A current information goal still needs a current inquiry')
-            p.update(status='unavailable',reason=a.note,reviewed_calls=list(p.get('call_ids',[])))
-        elif a.status=='waiting':raise ValueError('A ready goal cannot silently disappear')
+def complete(route,progress):
+    return all(progress.get(g['id'],{}).get('status') in TERMINAL for g in goals(route))
+
+
+def delivered_query(route, progress, goal_id, call_ids):
+    """Record delivery after the model answered from the actual query results."""
+    result=deepcopy(progress)
+    if any(g['id']==goal_id for g in goals(route)):
+        result.setdefault(goal_id,{}).update(status='satisfied',proof_calls=list(call_ids),
+                                             reviewed_calls=list(result.get(goal_id,{}).get('call_ids',call_ids)))
     return result
 
 
-def complete(route,progress):
-    return all(progress.get(g['id'],{}).get('status') in TERMINAL for g in goals(route))
+def delivered_text(route, progress, messages):
+    """Finish the ready response goals after real reads, without a model audit form."""
+    result=deepcopy(progress)
+    rows={c['id']:(c,r) for c,r in observations(last_turn(messages))}
+    for goal in goals(route):
+        p=result[goal['id']]
+        if (goal['kind'] in {'control','device_query','unsupported'} or p.get('status') in TERMINAL
+                or not ready(goal,progress)):
+            continue
+        linked=[rows[i] for i in p.get('call_ids',[]) if i in rows]
+        successful=[(c,r) for c,r in linked if r.get('status')=='ok'
+                    and not TOOLS[c['name']].changes_state and evidence_matches(goal,c['name'],route)]
+        if episode_description_required(route,goal) and not description_items(messages,p.get('call_ids',[])):
+            if any(c['name']=='read_episode_description' for c,r in linked) or any(not r.get('items') for c,r in successful):
+                p.update(status='unavailable',reason='未取得目标分集说明',reviewed_calls=list(p.get('call_ids',[])))
+            continue
+        if information_evidence_required(goal,route) and not successful:
+            if linked:
+                p.update(status='unavailable',reason='查询未取得可用结果',reviewed_calls=list(p.get('call_ids',[])))
+            continue
+        p.update(status='satisfied',proof_calls=[c['id'] for c,r in successful],
+                 reviewed_calls=list(p.get('call_ids',[])),delivery='text')
+    return result
 
 
 def call_goal(route,bindings,identity):

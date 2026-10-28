@@ -1,4 +1,4 @@
-"""Shared task/checkpoint contract. Persisted keys and budgets remain stable."""
+"""Shared task/checkpoint contract; existing records and budgets stay compatible."""
 from typing import TypedDict
 
 TERMINAL = {'completed', 'cancelled', 'failed'}
@@ -26,6 +26,7 @@ class State(TypedDict):
     research_plan: list[dict]
     route_rechecked: bool
     identity_repairs: int
+    continue_model: bool
 
 
 

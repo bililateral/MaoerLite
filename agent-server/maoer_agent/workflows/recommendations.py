@@ -2,6 +2,7 @@
 from maoer_agent.workflows.episode_pages import observations
 from maoer_agent.memory.history import last_turn
 from maoer_agent.workflows.goals import observations as goal_observations
+from maoer_agent.tools.definitions import TOOLS
 
 
 def duration_candidates(route,messages):
@@ -60,6 +61,7 @@ def criteria_call(route, messages, names):
     args = {'query': ' '.join(filter(None, (topic, criteria.get('preference', '').strip())))[:300],
             'podcast_id': next(iter(podcasts)), 'max_duration_seconds': criteria.get('max_duration_seconds', 0),
             'offset': 0, 'required_terms': [], 'excluded_terms': []}
-    if any(c['name'] == 'search_rss' and c['arguments'] == args for c, _ in current):
+    normalize=TOOLS['search_rss'].input_model.model_validate
+    if any(c['name'] == 'search_rss' and normalize(c['arguments']) == normalize(args) for c, _ in current):
         return None
     return {'name': 'search_rss', 'arguments': args}

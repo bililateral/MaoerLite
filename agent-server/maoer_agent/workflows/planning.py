@@ -25,20 +25,19 @@ def prepare_calls(messages, memory, calls, message, allowed, run_id, rounds):
                     known.extend(result.get('items', []))
         refresh_identity = selection_identity_refresh(messages, calls, known, run_id)
         if refresh_identity:
-            calls = [refresh_identity]
-            message = {'role': 'assistant', 'content': None, 'tool_calls': [{
-                'id': refresh_identity['id'], 'type': 'function',
-                'function': {'name': 'get_playback_state', 'arguments': '{}'}}]}
+            for call in calls:
+                if call['arguments'].get('podcast_id'):
+                    invalid_identities[call['id']] = 'playback_identity_refresh_required'
         for call in calls:
             args = call['arguments']
             if call['name'] in ('list_episodes', 'get_podcast_details') and not any(
                     (item.get('id') == args['podcast_id'] and item.get('kind') == 'podcast') or
                     (item.get('podcast_id') == args['podcast_id'] and item.get('kind') == 'episode') for item in known):
-                invalid_identities[call['id']] = 'unverified_podcast_id'
+                invalid_identities.setdefault(call['id'], 'unverified_podcast_id')
             if call['name'] in ('play_episode', 'read_episode_description') and not any(
                     item.get('id') == args['episode_id'] and item.get('podcast_id') == args['podcast_id']
                     and item.get('kind') == 'episode' for item in known):
-                invalid_identities[call['id']] = 'unverified_episode_id'
+                invalid_identities.setdefault(call['id'], 'unverified_episode_id')
         ids = [c['id'] for c in calls]
         seen = {c['id'] for m in messages for c in m.get('tool_calls', [])}
         if any(not i or i in seen for i in ids):
@@ -47,10 +46,8 @@ def prepare_calls(messages, memory, calls, message, allowed, run_id, rounds):
                       c['name'] in allowed and not episode_selection_question(messages, [c])]
         refresh = playback_preflight(messages, executable, run_id, rounds)
         if refresh:
-            if any(call['id'] in seen for call in refresh):
-                raise ModelFailure('invalid_tool_call')
-            calls = refresh
-            message = {'role': 'assistant', 'content': '播放前先核对本轮RSS，再继续完成用户要求；原控制计划尚未执行。用户选择旧列表位置时仍按原展示列表，不用补查列表重新编号；用户要求最新时按刷新结果选择。',
-                       'tool_calls': [{'id': c['id'], 'type': 'function', 'function': {
-                           'name': c['name'], 'arguments': json.dumps(c['arguments'], ensure_ascii=False)}} for c in calls]}
+            pending={c['arguments']['podcast_id'] for c in refresh}
+            for call in executable:
+                if call['name']=='play_episode' and call['arguments']['podcast_id'] in pending:
+                    invalid_identities[call['id']]='rss_refresh_required'
     return message, calls, invalid_identities

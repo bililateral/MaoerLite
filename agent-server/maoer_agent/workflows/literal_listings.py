@@ -1,7 +1,7 @@
 """Exhaustive literal title delivery from actual RSS page receipts."""
-import json
 from maoer_agent.memory.history import last_turn
 from maoer_agent.workflows.goals import observations
+from maoer_agent.tools.definitions import TOOLS
 
 
 def request(route):
@@ -33,7 +33,9 @@ def pages(route, messages):
     actual = observations(last_turn(messages));chain = [];seen = set()
     while args['offset'] not in seen:
         seen.add(args['offset'])
-        found = next(((c, r) for c, r in reversed(actual) if c['name'] == 'search_rss' and c['arguments'] == args), None)
+        normalize=TOOLS['search_rss'].input_model.model_validate
+        found = next(((c, r) for c, r in reversed(actual) if c['name'] == 'search_rss'
+                      and normalize(c['arguments']) == normalize(args)), None)
         if found is None:
             return criteria, goal, chain, args
         chain.append(found);result = found[1]
@@ -64,7 +66,7 @@ def completion(route, messages):
     if not view or view[3] is not None or not view[2]:
         return None
     criteria, goal, chain, _ = view
-    items = [];checks = [];seen = set();cursor = 0
+    items = [];seen = set();cursor = 0
     total = chain[0][1].get('matched_episodes')
     snapshot = chain[0][1].get('snapshot')
     for call, result in chain:
@@ -80,9 +82,6 @@ def completion(route, messages):
         page = result.get('items', [])
         if result.get('returned') != len(page) or result.get('next_offset') != cursor + len(page):
             return None
-        proof = {'number': call['id'], 'quote': json.dumps({k: result[k] for k in
-                 ('offset','returned','matched_episodes','retrieval_scope','exhaustive')}, ensure_ascii=False)}
-        evidence = [proof]
         for item in page:
             predicate = item.get('description_checks', {})
             if (item.get('kind') != 'episode' or item.get('podcast_id') != call['arguments']['podcast_id']
@@ -92,16 +91,8 @@ def completion(route, messages):
                     or predicate.get('excluded_terms') != criteria.get('excluded_terms', [])):
                 return None
             seen.add(item['id']);items.append(item)
-            evidence += [{'number': item['citation'], 'quote': item['title']},
-                         {'number': call['id'], 'quote': json.dumps({'id': item['id'],
-                           'description_checks': predicate}, ensure_ascii=False)}]
-            if len(evidence) >= 7:
-                checks.append({'claim': '本页真实标题及完整说明的字面筛选结果', 'issue': 'none', 'evidence': evidence})
-                evidence = [proof]
-        if len(evidence) > 1 or not page:
-            checks.append({'claim': '本页字面筛选及分页结果', 'issue': 'none', 'evidence': evidence})
         cursor = result['next_offset']
     if cursor != total or chain[-1][1].get('has_more') is not False:
         return None
-    return {'kind': 'literal_titles', 'items': items, 'goal_id': goal['id'],
-            'proof_calls': [c['id'] for c, _ in chain], 'checks': checks}
+    return {'kind': 'literal_titles', 'total':total, 'items': items, 'goal_id': goal['id'],
+            'proof_calls': [c['id'] for c, _ in chain]}

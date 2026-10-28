@@ -49,14 +49,6 @@ def reference_messages(conversation):
     return rows
 
 
-def conversation_proofs(conversation):
-    rows = dict(conversation.user_statements)
-    if any(conversation.summary.values()):
-        import json
-        rows['conversation_summary'] = json.dumps(conversation.summary, ensure_ascii=False)
-    return rows
-
-
 def history_metrics(conversation):
     return {'retained_turns': len(conversation.retained_turn_ids) or
             sum(m['role'] == 'user' for m in conversation.dialogue),

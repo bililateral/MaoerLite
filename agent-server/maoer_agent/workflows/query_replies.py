@@ -1,14 +1,13 @@
-"""Completed query facts for direct presentation, without interpreting app state."""
+"""Compute business facts from receipts for the agent's next model input."""
 from maoer_agent.memory.history import last_turn
 from maoer_agent.workflows.episode_pages import observations
-from maoer_agent.workflows.goals import goals, parameter_state, observations as goal_observations
+from maoer_agent.workflows.goals import goals, parameter_state, observations as goal_observations, ready, TERMINAL
 from maoer_agent.tools.definitions import TOOLS
 from maoer_agent.workflows.pagination import page_delivery
-import json
 
 
 def control_receipt_step(route,messages):
-    """Completed execution facts need no second semantic generation step."""
+    """Expose actual execution results without generating a final answer."""
     plan=route.get('task_plan',{}).get('goals',[])
     if (not plan or any(g['kind'] not in {'control','unsupported'} for g in plan) or route.get('web') or route.get('library')
             or route.get('response_needs',{}).get('app_guidance')
@@ -124,9 +123,28 @@ def library_reply_step(route, messages):
     return {'kind': 'library', 'pages': list(pages.values())}
 
 
-def library_completion_step(route, messages):
-    """Deliver one fully observed library listing, not a mixed semantic task."""
-    plan=goals(route)
+def library_plan(route):
+    """A standalone library query is meaningful even without an active goal graph."""
+    plan = route.get('task_plan', {}).get('goals', [])
+    if len(plan) == 1 and plan[0]['kind'] == 'library_query':
+        return plan
+    return goals(route)
+
+
+def library_route(route, progress):
+    if progress is None or len(route.get('task_plan',{}).get('goals',[]))<=1:
+        return route
+    active=[g for g in goals(route) if g['kind']=='library_query' and ready(g,progress)
+            and progress.get(g['id'],{}).get('status','pending') not in TERMINAL]
+    if len(active)!=1:return route
+    return {**route,'task_plan':{'goals':active},'control_actions':[],
+            'web':False,'device':False,'podcast':False}
+
+
+def library_completion_step(route, messages, progress=None):
+    """Compute a fully observed library listing for the model's answer."""
+    route=library_route(route,progress)
+    plan=library_plan(route)
     if (len(plan)!=1 or plan[0]['kind']!='library_query'
             or route.get('web') or route.get('podcast') or route.get('device')):return None
     selection=library_completion_selection(route)
@@ -163,13 +181,11 @@ def library_completion_step(route, messages):
             sections.append({'section_name':label,'pages':[{**pages[0],'offset':0,'total':len(selected),
                 'returned':len(selected),'items':selected,'has_more':False,'next_offset':0}]})
         step={**step,'sections':sections}
-    return {**step,'goal_id':plan[0]['id'],'proof_calls':[c['id'] for c,r in rows],
-        'receipt_checks':[{'claim':'资料库实际查询结果','issue':'none','evidence':[
-            {'number':c['id'],'quote':json.dumps({'tab':r['tab'],'total':r['total'],'offset':r['offset'],'has_more':r['has_more']})}]} for c,r in rows]}
+    return {**step,'goal_id':plan[0]['id'],'proof_calls':[c['id'] for c,r in rows]}
 
 
 def library_completion_selection(route):
-    needs=route.get('response_needs',{});plan=goals(route)
+    needs=route.get('response_needs',{});plan=library_plan(route)
     if (not needs.get('library_listing')
             or len(plan)!=1 or plan[0]['kind']!='library_query' or route.get('control_actions')
             or any(route.get(k) for k in ('web','podcast','device'))):return None
@@ -181,7 +197,8 @@ def library_completion_selection(route):
         'query':plan[0].get('query','')}
 
 
-def library_completion_call(route,messages):
+def library_completion_call(route,messages,progress=None):
+    route=library_route(route,progress)
     selection=library_completion_selection(route)
     if not selection:return None
     rows=[(c,r) for c,r in goal_observations(last_turn(messages)) if c['name']=='query_library'

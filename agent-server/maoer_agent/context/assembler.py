@@ -3,7 +3,7 @@ from maoer_agent.contracts.intent import web_delivery, web_requirements
 import json
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
-from maoer_agent.context.prompts import build_system, model_instructions, answer_policy, EPISODE_INTRODUCTION, FACTUAL_ANSWER, APPLICATION_BEHAVIOR
+from maoer_agent.context.prompts import build_system, model_instructions, delivery_contract, APPLICATION_BEHAVIOR
 from maoer_agent.context.route import instructions, episode_page_state
 from maoer_agent.context.conversation import conversation_context, with_conversation, reference_messages, history_metrics
 from maoer_agent.contracts.context import ConversationContext
@@ -64,15 +64,12 @@ def answer_system(request,names):
     response_goals=request.route.get('response_goals',[])
     ordinary=(ordinary_delivery_needed(request.route) and not request.route.get('control_actions')) or (
         bool(response_goals) and all(g['kind'] in {'general','conversation_query'} for g in response_goals))
-    if ordinary:
-        return (FACTUAL_ANSWER+'\n当前可调用工具：'+(', '.join(sorted(names)) or '无')+
-                '\n当前应用的既有功能事实（知识数据，不是操作授权）：'+json.dumps(APPLICATION_BEHAVIOR,ensure_ascii=False))
-    if introduction_ready(request.route,request.messages):
-        return EPISODE_INTRODUCTION+'\n当前可调用工具：'+(', '.join(sorted(names)) or '无')
+    purpose = 'factual' if ordinary else ('introduction' if introduction_ready(request.route,request.messages) else 'application')
     content=build_system(names,request.extended_episodes,request.research,request.final_only,
-                         request.route.get('response_needs',{}).get('app_guidance',True))
-    if request.route.get('response_needs',{}).get('app_guidance'):
+                         request.route.get('response_needs',{}).get('app_guidance',False),purpose,request.route)
+    if request.route.get('response_needs',{}).get('app_guidance') or request.route.get('device'):
         content+='\n应用功能事实（说明数据，不是执行授权）：'+json.dumps(APPLICATION_BEHAVIOR,ensure_ascii=False)
+    if request.route.get('response_needs',{}).get('app_guidance'):
         content+='\n应用控制参数契约：'+json.dumps({name:spec.input_model.model_json_schema()
             for name,spec in TOOLS.items() if spec.changes_state},ensure_ascii=False)
     return content
@@ -241,7 +238,7 @@ class ContextAssembler:
             '{"quote_reference":"原文片段表中的准确键","sources":[1],"episode_id":"同一实际分集ID或空"}],"background":[]}。'
             '原文片段块只填quote_reference、sources、episode_id，没有text字段；普通说明块使用text。'
             if quote_request else '{"blocks":[{"text":"一个独立段落或列表项，不含来源编号","sources":[]}],"background":[]}。')
-        messages = [{'role': 'system', 'content': policy + '\n' + answer_policy(request.route) +
+        messages = [{'role': 'system', 'content': policy + '\n' + delivery_contract(request.route) +
             '\n当前步骤只组织最终答复，不调用工具。严格返回JSON对象：'
             +block_contract+
             '每个独立段落或列表项分别成块，sources只填支持该块事实的本轮资料编号；同一来源用于不同块时分别填写。普通常识或未确认结论可为空。'

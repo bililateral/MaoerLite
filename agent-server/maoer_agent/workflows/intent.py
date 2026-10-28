@@ -7,7 +7,8 @@ from maoer_agent.contracts.errors import ModelFailure
 from maoer_agent.tools.definitions import scoped_tools,TOOLS
 from maoer_agent.workflows.goals import parameter_state
 from maoer_agent.contracts.intent import PageLookup, EpisodeCriteria, ControlIntent, ResponseNeeds, UnsupportedRequest, NetworkConstraint, WebLookup,TaskPlan, web_delivery
-from maoer_agent.context.route import conversation_view,displayed_episode_pages
+from maoer_agent.context.route import displayed_episode_pages
+from maoer_agent.context.assembler import ContextAssembler
 from maoer_agent.workflows.selection import normalize_selector
 from maoer_agent.contracts.model import JsonMessages
 
@@ -17,7 +18,7 @@ DEVICE_TOOLS = scoped_tools('device')
 LIBRARY_TOOLS = scoped_tools('library')
 
 
-async def classify(model, settings, messages, catalog, disputed=(), *, correction=None):
+async def classify(model, settings, messages, catalog, disputed=(), *, correction=None, conversation=None):
     choices = sorted({s['title'] for s in catalog} | {s['category'] for s in catalog})
     prompt = '''你是对话意图路由器，只返回JSON对象，先输出control_actions（字符串数组），再输出podcast、web、device、library（布尔值）、network_constraint（对象）、web_lookup（对象）、hint（字符串）、page_lookup（对象）、episode_criteria（对象）、response_needs（对象）、unsupported_request（对象）。
 同时输出对象task_plan={"goals":[{"id":"g1","kind":"general","request":"用户要完成的目标","depends_on":[],"require_success":false,"action":"","arguments":{},"query":"","as_of":"general","requested_results":0,"page_request":null,"target":null,"delivery":{"exact_text":"","sentence_count":0,"titles_only":null,"source_quote":""}}]}。goals至少保留一个用户目标，确认和普通聊天也有目标；每个独立目标一个goal。分集定位在goal.target中填写同page_lookup结构的对象关系，其他目标target=null，page_lookup为兼容投影。delivery按用户明确要求填写：exact_text为指定的逐字回复，sentence_count为句数、未限定为0，titles_only为标题要求、未限定为null；source_quote逐字摘录本轮格式要求，未指定文本或句数时可空。requested_results为用户明确要求交付的搜索链接数，未指定为0。catalog_query要求一页或指定数量的分集列表时page_request={"operation":"first/next/offset","reference":"已展示display引用或空","offset":0,"podcast_title":"节目名称或空","count":0}；count为用户明确要求的展示条数，未指定为0（整页）；first从首条开始，next从已展示列表结束处继续，offset为明确起始偏移；全部分集、统计、推荐和分集内容查询为null。
@@ -47,15 +48,15 @@ hint只从提供的节目名/分类中选择一个与用户实际话题相关的
 不要输出解释、Markdown或工具。'''
     async def discard(_): pass
     latest = next((m['content'] for m in reversed(messages) if m['role'] == 'user'), '')
-    reply = await model(replace(settings, agent_thinking=False, model_temperature=0), JsonMessages([
-        {'role': 'system', 'content': prompt},
-        {'role': 'user', 'content': json.dumps({'current_request':latest,'context':{**conversation_view(messages,history_only=True), 'hint_choices': choices,
+    assembler = ContextAssembler()
+    conversation = conversation or assembler.conversation(messages)
+    prepared = assembler.intent(prompt, conversation, {'hint_choices': choices,
             'control_contracts':{name:{'description':spec.description,'parameters':spec.input_model.model_json_schema()}
                                  for name,spec in TOOLS.items() if spec.changes_state},
             'contract_correction':correction,
             **({'review': '此前范围可能遗漏混合意图，请再次核对用户本轮是否确实要求这些动作；建议工具不是授权，不因建议而改变用户意图。',
-                'unexecuted_suggestions': sorted(disputed)} if disputed else {})}}, ensure_ascii=False)}
-    ]), [], discard)
+                'unexecuted_suggestions': sorted(disputed)} if disputed else {})}, settings.context_budget_bytes)
+    reply = await model(replace(settings, agent_thinking=False, model_temperature=0), JsonMessages(prepared.messages), [], discard)
     plan_failure=False
     try:
         text = reply.get('content', '').strip()
@@ -154,7 +155,7 @@ hint只从提供的节目名/分类中选择一个与用户实际话题相关的
             repair={'reason':reason,'previous_output':reply.get('content') or ''}
             if plan_failure:repair['fixed_route']={**data,'control_actions':controls}
             return await classify(model,settings,messages,catalog,disputed,
-                correction=repair)
+                correction=repair,conversation=conversation)
         raise ModelFailure('intent_unavailable',details={'contract_error':reason}) from None
 
 

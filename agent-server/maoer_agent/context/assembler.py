@@ -4,11 +4,13 @@ import json
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
 from maoer_agent.context.prompts import build_system, model_instructions, answer_policy, EPISODE_INTRODUCTION, FACTUAL_ANSWER, APPLICATION_BEHAVIOR
-from maoer_agent.context.route import instructions, conversation_view, episode_page_state
+from maoer_agent.context.route import instructions, episode_page_state
+from maoer_agent.context.conversation import conversation_context, with_conversation, reference_messages, history_metrics
+from maoer_agent.context.conversation import conversation_proofs as recall_proofs
+from maoer_agent.contracts.context import ConversationContext
 from maoer_agent.context.budget import fit_context
 from maoer_agent.core.limits import AGENT_OUTPUT_TOKENS, AGENT_THINKING_OUTPUT_TOKENS
-from maoer_agent.memory.history import last_turn, model_messages, PLAYBACK_SNAPSHOT_TOOLS
-from maoer_agent.memory.summary import with_summary
+from maoer_agent.memory.history import last_turn, PLAYBACK_SNAPSHOT_TOOLS
 from maoer_agent.research.sources import citation_context, current_citation_view
 from maoer_agent.tools.results import outcome_facts, RSS_STATISTIC_FIELDS, receipt_evidence
 from maoer_agent.research.updates import publication_time
@@ -36,6 +38,7 @@ class AnswerInput:
     model: str
     context_budget_bytes: int
     agent_thinking: bool
+    conversation: ConversationContext | None = None
 
 
 @dataclass(frozen=True)
@@ -123,12 +126,8 @@ def review_receipt_view(rows, sources):
 
 def conversation_proofs(request):
     """User statements and the stored summary are recall data, never device identity."""
-    previous=request.messages[:-len(last_turn(request.messages))]
-    rows={f'conversation_user_{i}':m['content'] for i,m in enumerate(previous)
-          if m['role']=='user' and m.get('content')}
-    if any(request.summary.values()):
-        rows['conversation_summary']=json.dumps(request.summary,ensure_ascii=False)
-    return rows
+    return recall_proofs(request.conversation or conversation_context(
+        request.messages, request.memory, request.summary, request.summary_pending))
 
 
 def review_memory_proofs(request):
@@ -138,28 +137,30 @@ def review_memory_proofs(request):
 
 
 class ContextAssembler:
+    conversation = staticmethod(conversation_context)
+
+    def intent(self, prompt, conversation, context, budget):
+        messages = [{'role': 'system', 'content': prompt},
+                    *reference_messages(conversation),
+                    {'role': 'user', 'content': json.dumps({
+                        'current_request': conversation.current_request, 'context': context}, ensure_ascii=False)}]
+        messages = with_conversation(messages, conversation)
+        messages, metrics = fit_context(messages, [], budget, AGENT_OUTPUT_TOKENS)
+        return PreparedContext(messages, {**metrics, 'history': history_metrics(conversation)})
+
     def answer(self, request: AnswerInput):
         names = {d['function']['name'] for d in request.tools}
         needs = request.route.get('response_needs', {})
         # Control planning keeps its existing authorization and execution
         # instructions; final delivery shares the same evidence contract.
         ordinary = ordinary_delivery_needed(request.route) and not request.route.get('control_actions')
-        turn_messages = last_turn(request.messages) if ordinary else request.messages
+        turn_messages = last_turn(request.messages)
+        conversation = request.conversation or self.conversation(
+            request.messages, request.memory, request.summary, request.summary_pending)
         system = answer_system(request,names)
         web = web_evidence(last_turn(request.messages))
-        base = [{'role': 'system', 'content': system}, *(turn_messages if ordinary else turn_messages[1:])]
-        if ordinary:
-            prior = request.messages[1:len(request.messages) - len(turn_messages)]
-            prior_view=conversation_view(prior)
-            conversation = prior_view['conversation']
-            if prior_view['known_materials']:
-                base.insert(1,{'role':'system','content':'已取得的资料身份（供只读查询定位，不代表本轮已读正文）：'+
-                    json.dumps(prior_view['known_materials'],ensure_ascii=False)})
-            if conversation:
-                base.insert(1, {'role': 'system', 'content':
-                    '会话上下文数据，仅用于理解指代和仍适用的用户要求；旧答复不是本轮已核实证据：\n' +
-                    json.dumps(conversation, ensure_ascii=False)})
-        messages = model_messages(base, {} if ordinary else request.memory)
+        base = [{'role': 'system', 'content': system}, *reference_messages(conversation), *turn_messages]
+        messages = with_conversation(base, conversation, history_receipts=not ordinary)
         messages = publication_view(messages)
         calls={}
         projected=[]
@@ -177,7 +178,6 @@ class ContextAssembler:
             messages = candidate_view(messages,web_delivery(request.route))
             needs = request.route.get('response_needs', {})
             messages = evidence_view(messages, needs.get('retrieval_statistics', True), needs.get('titles_only', False))
-        messages = with_summary(messages, request.summary, request.summary_pending > 0)
         if reply_requirements(request.route):
             messages.insert(1,{'role':'system','content':'用户目标的明确交付约束：'+json.dumps(reply_requirements(request.route),ensure_ascii=False)})
         progress=request.route.get('goal_view',[])
@@ -215,14 +215,13 @@ class ContextAssembler:
                 + json.dumps(facts, ensure_ascii=False)})
         messages, metrics = fit_context(messages, request.tools, request.context_budget_bytes,
                                        AGENT_THINKING_OUTPUT_TOKENS if request.agent_thinking else AGENT_OUTPUT_TOKENS)
-        return PreparedContext(messages, metrics)
+        return PreparedContext(messages, {**metrics, 'history': history_metrics(conversation)})
 
     def factual_delivery(self, request, render_query, correction=None):
         current = last_turn(request.messages)
         question = next(m['content'] for m in current if m['role'] == 'user')
-        citation_view = current_citation_view(request.messages)
-        prior = citation_view[1:len(citation_view) - len(current)]
-        conversation = conversation_view(prior)['conversation']
+        conversation = request.conversation or self.conversation(
+            request.messages, request.memory, request.summary, request.summary_pending)
         policy = answer_system(request,set())
         quote_request=request.route.get('page_lookup',{}).get('target_kind')=='evidence_quote'
         block_contract=(
@@ -256,9 +255,7 @@ class ContextAssembler:
             quotes=list(quotation_evidence(request.sources).items())
             for offset in range(0,len(quotes),12):
                 messages.append({'role':'system','content':'原文片段表：'+json.dumps(dict(quotes[offset:offset+12]),ensure_ascii=False)})
-        if request.tools:
-            messages.append({'role':'system','content':'已取得的资料身份（供只读查询定位，不代表本轮已读正文）：'+
-                json.dumps(conversation_view(request.messages)['known_materials'],ensure_ascii=False)})
+        messages.extend(reference_messages(conversation))
         for source in request.sources:
             messages.append({'role': 'system', 'content': '本轮可引用资料（类型以evidence_field为准）：' + json.dumps(
                 source_view(source), ensure_ascii=False)})
@@ -293,8 +290,6 @@ class ContextAssembler:
                    if name=='get_playback_state' else '最近一次控制执行时附带的播放器状态（采样发生在操作执行时，未重新查询当前状态）：')
             messages.append({'role': 'system', 'content':
                 label + render_query({'kind': 'playback_facts', 'result': result})})
-        for turn in conversation:
-            messages.append({'role': 'system', 'content': '会话上下文数据（旧答复不是本轮已核实证据）：' + json.dumps(turn, ensure_ascii=False)})
         messages.append({'role': 'user', 'content': question})
         if correction:
             messages.insert(-1, {'role': 'system', 'content':
@@ -304,7 +299,7 @@ class ContextAssembler:
             if lookup_id:
                 rows=self.review_receipts(request.messages,request.route.get('response_needs',{}).get('retrieval_statistics',False))
                 messages[-1:-1]=receipt_messages([row for row in rows if row['call_id']==lookup_id])
-        messages=with_summary(messages,request.summary,request.summary_pending>0)
+        messages=with_conversation(messages,conversation)
         messages, _ = fit_context(messages, [], request.context_budget_bytes, AGENT_THINKING_OUTPUT_TOKENS if request.agent_thinking else AGENT_OUTPUT_TOKENS)
         return messages
 
@@ -352,7 +347,8 @@ ready控制目标因为用户尚未提供必填选择或参数而waiting时，qu
         messages = [{'role': 'system', 'content': system},
             {'role':'system','content':'校核结构契约：'+json.dumps(DraftReview.model_json_schema(),ensure_ascii=False,separators=(',',':'))},
             {'role':'system','content':'用户目标及依赖进度：'+json.dumps(progress,ensure_ascii=False)},
-            {'role':'system','content':'对话回顾证据（仅用于用户自述/对话内容，不证明外部事实或实时状态）：'+json.dumps(review_memory_proofs(request),ensure_ascii=False)},
+            *[{'role':'system','content':'对话回顾证据（用户原话或摘要）：'+json.dumps({identity:text},ensure_ascii=False)}
+              for identity,text in review_memory_proofs(request).items()],
             *receipt_messages(review_receipt_view(observed,request.sources)),
             {'role': 'system', 'content': '可申请的只读工具契约：' + json.dumps(
                 [d for d in request.tools if d['function']['name'] in names], ensure_ascii=False)},
@@ -382,7 +378,9 @@ ready控制目标因为用户尚未提供必填选择或参数而waiting时，qu
                 {k:s[k] for k in ('number','title','source_url','published','fetched_at') if k in s}
                 for s in candidates if s.get('kind')=='web' and not s.get('document_id')],ensure_ascii=False)},
             {'role':'user','content':next(m['content'] for m in last_turn(request.messages) if m['role']=='user')}]
-        messages=with_summary(messages,request.summary,request.summary_pending>0)
+        conversation=request.conversation or self.conversation(
+            request.messages,request.memory,request.summary,request.summary_pending)
+        messages=with_conversation(messages,conversation)
         messages,_=fit_context(messages,[],request.context_budget_bytes,AGENT_OUTPUT_TOKENS)
         return messages
 

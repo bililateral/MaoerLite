@@ -112,11 +112,7 @@ def displayed_selection(lookup, pages):
     return page,item
 
 
-def conversation_view(messages, *, history_only=False):
-    end=max((i for i,m in enumerate(messages) if m['role']=='user'),default=len(messages))
-    conversation=messages[:end] if history_only else messages
-    recent = [{'role': m['role'], 'content': (m.get('content') or '')[:2000]}
-              for m in conversation if m['role'] in ('user', 'assistant') and m.get('content')][-8:]
+def known_materials(messages):
     materials = {}
     for message in messages:
         if message['role'] != 'tool':
@@ -126,8 +122,7 @@ def conversation_view(messages, *, history_only=False):
             key = (item.get('kind'), item.get('id'))
             materials[key] = {k: item[k] for k in ('kind', 'id', 'title', 'podcast_id', 'podcast_title',
                 'source_url', 'evidence_field', 'document_id', 'offset') if k in item}
-    return {'conversation': recent, 'known_materials': list(materials.values())[-12:],
-            'episode_pages': episode_pages(messages),'displayed_episode_pages':displayed_episode_pages(messages)}
+    return list(materials.values())[-12:]
 
 
 def instructions(route):

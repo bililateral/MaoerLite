@@ -17,6 +17,8 @@ class State(TypedDict):
     summary_candidates: list[str]
     summary: dict
     summary_pending: int
+    summary_covered: list[str]
+    history_turn_ids: list[str]
     extended_episodes: bool
     deferred_results: list[dict]
     research: bool

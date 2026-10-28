@@ -80,7 +80,8 @@ class AgentTasks:
         messages = [{'role': 'system', 'content': SYSTEM + selection_policy(extended)}] + history + [{'role': 'user', 'content': request.message}]
         initial = {'run_id': request.id, 'messages': messages, 'rounds': 0, 'calls': [], 'memory': memory,
                    'tool_count': 0, 'final_only': False, 'summary_candidates': [r['id'] for r in evicted],
-                   'summary': {}, 'summary_pending': 0, 'extended_episodes': extended,
+                   'summary': {}, 'summary_pending': 0, 'summary_covered': [],
+                   'history_turn_ids': [r['id'] for r in previous[len(evicted):]], 'extended_episodes': extended,
                    'research': 'research_v3' in value.get('capabilities', [])}
         run = self.store.put({'id': request.id, 'conversation_id': request.conversation_id, 'status': 'generating',
             'text': '', 'calls': [], 'results': [], 'claimed': [], 'receipts': {}, 'error': '', 'retry_after': 0,

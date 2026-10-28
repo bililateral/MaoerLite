@@ -22,6 +22,7 @@ from maoer_agent.tools.definitions import SERVER_TOOLS, TOOLS
 from maoer_agent.research.sources import annotate, valid_citations
 from maoer_agent.tools.results import checked_result, outcome_facts, receipt_evidence
 from maoer_agent.context.assembler import AnswerInput, ContextAssembler, factual_delivery_needed, conversation_proofs
+from maoer_agent.context.conversation import history_metrics
 from maoer_agent.contracts.answers import FactualAnswer, AnswerReview, DraftReview, EvidencePlan, quotation_evidence
 from maoer_agent.contracts.model import JsonMessages, model_call_context
 from maoer_agent.contracts.tasks import checked_reply
@@ -147,10 +148,17 @@ class AgentGraph:
             self.store.update(run_id, phase='intent')
             async def route_model(settings, messages, tools, publish):
                 return await self.invoke_model(run_id, 'intent', settings, messages, tools, publish)
-            route = await classify(route_model, self.settings, state['messages'], self.catalog if 'search_hints' in self.get_run(run_id)['input'].get('capabilities', []) else [])
+            conversation_view = self.conversation_input(state, saved['data'], len(pending), saved['covered'])
+            route = await classify(route_model, self.settings, state['messages'], self.catalog if 'search_hints' in self.get_run(run_id)['input'].get('capabilities', []) else [], conversation=conversation_view)
             extra['route'] = route
-            self.store.update(run_id, search_hint=route['hint'], route=route, sources=[])
-        return {'summary': saved['data'], 'summary_pending': len(pending), 'summary_candidates': [], **extra}
+            self.store.update(run_id, search_hint=route['hint'], route=route, sources=[], conversation_context=history_metrics(conversation_view))
+        return {'summary': saved['data'], 'summary_pending': len(pending), 'summary_covered': saved['covered'], 'summary_candidates': [], **extra}
+
+    def conversation_input(self, state, summary=None, pending=None, covered=None):
+        return self.context.conversation(state['messages'],state.get('memory',{}),
+            state.get('summary',{}) if summary is None else summary,
+            state.get('summary_pending',0) if pending is None else pending,
+            state.get('history_turn_ids',()),state.get('summary_covered',()) if covered is None else covered)
 
 
     def answer_input(self, state, available, final_only):
@@ -161,7 +169,7 @@ class AgentGraph:
             {**route,'goal_progress':progress,'goal_view':task_goals.view(route,progress),
              'resolved_episode':resolved_episode(route,state['messages'])}, available, state.get('extended_episodes', False),
             state.get('research', False), final_only, self.settings.model,
-            self.settings.context_budget_bytes, self.settings.agent_thinking)
+            self.settings.context_budget_bytes, self.settings.agent_thinking, self.conversation_input(state))
 
     def scoped_tools(self,state,final_only):
         run=self.get_run(state['run_id']);route=state.get('route',{})
@@ -474,7 +482,7 @@ class AgentGraph:
             # Upgrade a legacy checkpoint once, retaining its existing route.
             async def recovery_intent(settings, messages, tools, publish):
                 return await self.invoke_model(run_id, 'recovery_intent', settings, messages, tools, publish)
-            checked = await classify(recovery_intent, self.settings, state['messages'], [])
+            checked = await classify(recovery_intent, self.settings, state['messages'], [], conversation=self.conversation_input(state))
             route = {**state.get('route', {}), 'control_actions': checked['control_actions']}
             state = {**state, 'route': route}
             self.store.update(run_id, route=route)
@@ -644,7 +652,7 @@ class AgentGraph:
             async def route_model(settings, messages, tools, publish):
                 return await self.invoke_model(run_id, 'intent_recheck', settings, messages, tools, publish)
             try:
-                checked = await classify(route_model, self.settings, state['messages'], [], disputed)
+                checked = await classify(route_model, self.settings, state['messages'], [], disputed, conversation=self.conversation_input(state))
                 route = {**route, 'device': route.get('device', False) or checked['device'],
                          'control_actions': checked['control_actions']}
                 allowed = allowed_tools(route)

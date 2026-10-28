@@ -26,12 +26,12 @@ class ResearchTools:
             as_of=getattr(context,'as_of_date','')
             if args.get('delivery','answer')!='results' and as_of and as_of not in query:
                 query += ' as of ' + as_of
-            result = await self.web.tavily('search', {'query': query, 'search_depth': 'basic', 'max_results': 5,
+            result = await self.web.tavily('search', {'query': query, 'search_depth': 'basic', 'max_results': 8,
                                                 'include_answer': False, 'include_raw_content': False,
                                                 'auto_parameters': False}, request_id)
             if result.get('status') == 'error': return result
             items = []
-            for row in result.get('results', [])[:5]:
+            for row in result.get('results', [])[:8]:
                 url = row.get('url', '')
                 if not public_url(url): continue
                 items.append({'kind': 'web', 'id': digest(url), 'title': row.get('title', '')[:300],

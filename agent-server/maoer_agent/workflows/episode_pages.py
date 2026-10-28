@@ -159,6 +159,7 @@ def next_step(view: PageView, names, final_only=False):
     if any(r.get('status') != 'ok' for _, r in searches):
         return _answer('search_failed', title)
     reads = [(c, r) for c, r in current if c['name'] == 'read_web_page']
+    read_failed = any(r.get('status') != 'ok' for _, r in reads)
     descriptions = [(c, r) for c, r in current if c['name'] == 'read_episode_description'
                     and c['arguments'].get('episode_id') in episodes and r.get('status') == 'ok']
     direct = transcript_links([i for _, r in descriptions for i in r.get('items', [])]) if transcript else []
@@ -193,11 +194,11 @@ def next_step(view: PageView, names, final_only=False):
             call, result = descriptions[-1]
             return _call('read_episode_description', **{**call['arguments'], 'offset': result['next_offset']})
         if 'web_search' not in names:
-            return _answer('unsupported', title)
+            return _answer('read_failed' if read_failed else 'unsupported', title)
         query = lookup['query'] + (' 完整文稿' if transcript else '')
         return _call('web_search', query=query[:300])
     if final_only and any(url not in attempted for url in candidates):
         return _answer('budget_exhausted', title, verification=True)
-    if any(r.get('status') != 'ok' for _, r in reads):
+    if read_failed:
         return _answer('read_failed', title)
     return _answer('not_found', title)

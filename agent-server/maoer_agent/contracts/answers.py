@@ -162,12 +162,14 @@ def review_evidence(sources, receipts):
         if len(bank)>=192 or not isinstance(text,str) or not text.strip() or len(text)>600:return
         value={'number':number,'quote':text}
         if value not in bank.values():
-            prefix='source'+str(number) if type(number) is int else 'memory' if number.startswith('conversation_') else 'receipt'
+            prefix='source'+str(number) if type(number) is int else 'receipt'
             bank[prefix+'_'+str(len(bank)+1)]=value
     for source in sources:
         number=source['number']
         for key in ('title','podcast_title','published','published_display'):
             add(number,source.get(key))
+        if source.get('duration_seconds') is not None:
+            add(number,json.dumps({'duration_seconds':source['duration_seconds']},ensure_ascii=False))
         body=source.get('evidence','')
         # Each window is a contiguous original excerpt. The full source remains available.
         for offset in range(0,min(len(body),2000),500):add(number,body[offset:offset+500])
@@ -180,9 +182,8 @@ def review_evidence(sources, receipts):
                     for row in item[:12]:fields(number,row)
                 elif key in ('result','arguments'):fields(number,item)
     for number,text in receipts.items():
-        if number.startswith('conversation_'):
-            for offset in range(0,min(len(text),2000),500):add(number,text[offset:offset+500])
-        else:
+        # Recall uses its original conversation proof IDs and exact excerpts.
+        if not number.startswith('conversation_'):
             fields(number,json.loads(text))
     return bank
 

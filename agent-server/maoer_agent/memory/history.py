@@ -83,6 +83,20 @@ def references(memory):
     return items
 
 
+def podcast_identities(messages):
+    """Names paired with verified podcast IDs in successful tool receipts."""
+    from maoer_agent.tools.results import receipt_evidence
+    names = {}
+    for row in receipt_evidence(messages):
+        if row['result'].get('status') != 'ok':continue
+        for item in row['result'].get('items', []):
+            if item.get('kind') not in ('podcast','episode'):continue
+            identity, title = ((item.get('id'), item.get('title')) if item.get('kind') == 'podcast'
+                               else (item.get('podcast_id'), item.get('podcast_title')))
+            if identity and title:names[identity] = title
+    return names
+
+
 def playback_selection(result):
     """A real selected item's identity, independent of its playing/paused state."""
     if result.get('status') != 'ok':

@@ -1,6 +1,6 @@
 """Catalog page targets and completion from delivered history and paired receipts."""
-from maoer_agent.context.route import displayed_episode_pages
-from maoer_agent.memory.history import last_turn
+from maoer_agent.context.route import displayed_episode_pages, displayed_selection
+from maoer_agent.memory.history import last_turn, podcast_identities
 from maoer_agent.tools.results import receipt_evidence, catalog_page_chain, catalog_page_view
 
 
@@ -22,10 +22,8 @@ def page_target(goal,messages):
 def page_observations(goal,messages):
     target=page_target(goal,messages)
     if target is None:return []
-    rows=receipt_evidence(messages)
     title=goal['page_request'].get('podcast_title','')
-    podcasts={i['id']:i.get('title','') for r in rows if r['result'].get('status')=='ok'
-              for i in r['result'].get('items',[]) if i.get('kind')=='podcast'}
+    podcasts=podcast_identities(messages)
     current=[r for r in receipt_evidence(last_turn(messages))
              if not title or podcasts.get(r['arguments'].get('podcast_id'))==title]
     return catalog_page_chain(current,target)
@@ -54,12 +52,26 @@ def page_continuation(goal,messages):
 def page_delivery(route,messages):
     """A plain page has a factual renderer; other goals keep semantic delivery."""
     goals=route.get('task_plan',{}).get('goals',[])
-    if len(goals)!=1 or not goals[0].get('page_request'):return None
+    if not goals:return None
     if (route.get('control_actions') or any(route.get(k) for k in ('web','device','library'))
             or route.get('episode_criteria',{}).get('requested')
             or route.get('page_lookup',{}).get('requested')):return None
     needs=route.get('response_needs',{})
     if any(needs.get(k) for k in ('app_guidance','retrieval_statistics','brief_episode_intro')):return None
+    if len(goals)>1:
+        if not needs.get('titles_only') or any(g['kind']!='catalog_query' for g in goals):return None
+        items=[]
+        for goal in goals:
+            if goal.get('page_request'):
+                page=observed_page(goal,messages)
+                if not page:return None
+                items.extend(page['result']['items'])
+            else:
+                selected=displayed_selection(goal.get('target') or {},displayed_episode_pages(messages))
+                if not selected:return None
+                items.append(selected[1])
+        return {'kind':'episode_page','result':{'status':'ok','items':items,'has_more':False},'titles_only':True}
+    if not goals[0].get('page_request'):return None
     row=observed_page(goals[0],messages)
     if row:return {'kind':'episode_page','result':row['result'],'titles_only':needs.get('titles_only',False)}
     return None

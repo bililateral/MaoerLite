@@ -6,6 +6,7 @@ import json
 from maoer_agent.research.updates import publication_time
 from maoer_agent.research.sources import citation_numbers,canonical_citations
 from maoer_agent.core.urls import public_links
+from maoer_agent.core.errors import error_message
 
 
 def _text(value):
@@ -78,6 +79,12 @@ def selection_reply(step):
 
 
 def query_reply(step):
+    if step['kind']=='query_failures':
+        rows=['关于“'+_text(f['request'])+'”：'+({'error':'查询失败，本轮无法确认。','unavailable':'查证不可用，本轮无法确认。'}.get(f['status'],'查询结果无法确认。'))
+              +error_message(f['code']) for f in step['failures']]
+        if step.get('receipts'):
+            rows.append(query_reply({'kind':'control_receipts','receipts':step['receipts'],'unsupported':[]}))
+        return '\n'.join(rows)
     if step['kind']=='literal_titles':
         return ('\n'.join(f"{n}. **{_text(item['title'])}**[{item['citation']}]" for n,item in enumerate(step['items'],1))
                 if step['items'] else '未找到符合字面条件的分集。')
@@ -96,7 +103,7 @@ def query_reply(step):
     if step['kind']=='selection_clarification':
         done=query_reply({'kind':'control_receipts','receipts':step['receipts']}) if step['receipts'] else ''
         return (done+'\n' if done else '')+'你指的是哪个节目或哪份列表中的条目？请提供节目或分集名称。'
-    if step['kind']=='acknowledgement':return '已记下。'
+    if step['kind']=='acknowledgement':return step.get('text') or '已记下。'
     if step['kind']=='control_receipts':
         rows=[]
         actions={'play_episode':'播放','pause_playback':'暂停','resume_playback':'继续播放',

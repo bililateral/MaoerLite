@@ -20,7 +20,7 @@ LIBRARY_TOOLS = scoped_tools('library')
 async def classify(model, settings, messages, catalog, disputed=(), *, correction=None):
     choices = sorted({s['title'] for s in catalog} | {s['category'] for s in catalog})
     prompt = '''你是对话意图路由器，只返回JSON对象，先输出control_actions（字符串数组），再输出podcast、web、device、library（布尔值）、network_constraint（对象）、web_lookup（对象）、hint（字符串）、page_lookup（对象）、episode_criteria（对象）、response_needs（对象）、unsupported_request（对象）。
-同时输出task_plan={"goals":[]}。每个独立用户目标一个goal：{"id":"g1","kind":"public_query","request":"用户要完成的目标","depends_on":[],"require_success":false,"action":"","arguments":{},"query":"外部目标检索式","as_of":"current","requested_results":0,"page_request":null}。requested_results为用户明确要求交付的搜索链接数，未指定为0。catalog_query要求一页或指定数量的分集列表时page_request={"operation":"first/next/offset","reference":"已展示display引用或空","offset":0,"podcast_title":"节目名称或空","count":0}；count为用户明确要求的展示条数，未指定为0（整页）；first从首条开始，next从已展示列表结束处继续，offset为明确起始偏移；全部分集、统计、推荐和分集内容查询为null。
+同时输出对象task_plan={"goals":[{"id":"g1","kind":"general","request":"用户要完成的目标","depends_on":[],"require_success":false,"action":"","arguments":{},"query":"","as_of":"general","requested_results":0,"page_request":null,"target":null,"delivery":{"exact_text":"","sentence_count":0,"titles_only":null,"source_quote":""}}]}。goals至少保留一个用户目标，确认和普通聊天也有目标；每个独立目标一个goal。分集定位在goal.target中填写同page_lookup结构的对象关系，其他目标target=null，page_lookup为兼容投影。delivery按用户明确要求填写：exact_text为指定的逐字回复，sentence_count为句数、未限定为0，titles_only为标题要求、未限定为null；source_quote逐字摘录本轮格式要求，未指定文本或句数时可空。requested_results为用户明确要求交付的搜索链接数，未指定为0。catalog_query要求一页或指定数量的分集列表时page_request={"operation":"first/next/offset","reference":"已展示display引用或空","offset":0,"podcast_title":"节目名称或空","count":0}；count为用户明确要求的展示条数，未指定为0（整页）；first从首条开始，next从已展示列表结束处继续，offset为明确起始偏移；全部分集、统计、推荐和分集内容查询为null。
 control_contracts是实际控制工具参数契约，arguments使用对应字段；用户未明确的参数不猜。contract_correction非空时按同一用户要求纠正上次结构错误，不改变用户目标或以近似参数替换不支持的值。
 控制意图与参数完备性分别表示：用户肯定要求的动作在缺参时仍须保留，未知参数留空，后续查询或澄清；不得删除动作来满足计划契约。
 kind为control/device_query/public_query/catalog_query/library_query/conversation_query/general/unsupported。control逐个对应control_actions中的动作与次数，action填工具动作名，arguments填用户明确参数；unsupported的action可填unsupported_request中的操作名，不进入control_actions。查询目标不得混入控制命令或私人凭据。普通概念用general；回顾用户在本次对话说过的信息用conversation_query；外部事实/状态查证用public_query；目录名称/拼音查找用catalog_query。
@@ -49,13 +49,12 @@ hint只从提供的节目名/分类中选择一个与用户实际话题相关的
     latest = next((m['content'] for m in reversed(messages) if m['role'] == 'user'), '')
     reply = await model(replace(settings, agent_thinking=False, model_temperature=0), JsonMessages([
         {'role': 'system', 'content': prompt},
-        {'role': 'user', 'content': json.dumps({**conversation_view(messages,history_only=True), 'hint_choices': choices,
+        {'role': 'user', 'content': json.dumps({'current_request':latest,'context':{**conversation_view(messages,history_only=True), 'hint_choices': choices,
             'control_contracts':{name:{'description':spec.description,'parameters':spec.input_model.model_json_schema()}
                                  for name,spec in TOOLS.items() if spec.changes_state},
             'contract_correction':correction,
             **({'review': '此前范围可能遗漏混合意图，请再次核对用户本轮是否确实要求这些动作；建议工具不是授权，不因建议而改变用户意图。',
-                'unexecuted_suggestions': sorted(disputed)} if disputed else {})}, ensure_ascii=False)},
-        {'role': 'user', 'content': latest}
+                'unexecuted_suggestions': sorted(disputed)} if disputed else {})}}, ensure_ascii=False)}
     ]), [], discard)
     plan_failure=False
     try:
@@ -75,11 +74,19 @@ hint只从提供的节目名/分类中选择一个与用户实际话题相关的
             if not isinstance(quote, str) or not quote.strip() or not any(
                     quote in m.get('content', '') for m in messages if m['role'] == 'user'):
                 raise ValueError()
+        controls = ControlIntent.model_validate({'actions': data.get('control_actions', [])}).actions
+        try:
+            plan=TaskPlan.model_validate(data.get('task_plan',{})).checked(controls,latest)
+        except (ValueError,TypeError,AttributeError):
+            plan_failure=True
+            raise
+        targets=[g for g in plan['goals'] if g.get('target') is not None]
+        target_goal=targets[0] if len(targets)==1 else None
+        if target_goal:data['page_lookup']=target_goal['target']
         lookup = PageLookup.model_validate(data.get('page_lookup', {})).model_dump()
         if 'target_kind' not in data.get('page_lookup', {}): raise ValueError()
         lookup['requested'] = lookup['target_kind'] in ('episode_page', 'episode_transcript', 'podcast_homepage')
         criteria = EpisodeCriteria.model_validate(data.get('episode_criteria', {})).model_dump()
-        controls = ControlIntent.model_validate({'actions': data.get('control_actions', [])}).actions
         needs = ResponseNeeds.model_validate(data.get('response_needs', {})).model_dump()
         if needs['library_scope']=='favorites' and (not needs['library_scope_quote'].strip()
                 or needs['library_scope_quote'] not in latest):
@@ -102,7 +109,18 @@ hint只从提供的节目名/分类中选择一个与用户实际话题相关的
         if (quote_podcast or kind == 'episode_selection') and not lookup['other_tasks']:
             web = False
         try:
-            plan=TaskPlan.model_validate(data['task_plan']).checked(controls) if 'task_plan' in data else {'goals':[]}
+            if query_only and any(g['kind']=='control' for g in plan['goals']):
+                raise ValueError('The explicit read-only selection cannot contain control goals')
+            if target_goal:
+                target_goal['target']=lookup
+            elif kind!='none':
+                candidates=[g for g in plan['goals'] if g['kind']=='catalog_query']
+                if len(candidates)==1:candidates[0]['target']=lookup
+            for goal in plan['goals']:
+                if (goal.get('target') or {}).get('target_kind')=='episode_selection':goal['page_request']=None
+            controls=[g['action'] for g in plan['goals'] if g['kind']=='control'] if plan['goals'] else controls
+            title_constraints=[g['delivery']['titles_only'] for g in plan['goals'] if g['delivery']['titles_only'] is not None]
+            if title_constraints:needs['titles_only']=all(title_constraints)
             if needs['brief_episode_intro']:
                 for goal in plan['goals']:
                     if goal['kind']=='catalog_query':goal['page_request']=None
@@ -110,6 +128,11 @@ hint只从提供的节目名/分类中选择一个与用户实际话题相关的
                 raise ValueError('RSS evidence quote goals use catalog_query, not public_query')
             for goal in plan['goals']:
                 if goal['kind']=='control':parameter_state(goal)
+            if plan['goals']:
+                podcast=podcast or any(g['kind']=='catalog_query' for g in plan['goals'])
+                web=web or any(g['kind']=='public_query' for g in plan['goals'])
+                data['device']=data['device'] or any(g['kind'] in ('control','device_query') for g in plan['goals'])
+                data['library']=data.get('library',False) or any(g['kind']=='library_query' for g in plan['goals'])
         except (ValueError,TypeError,AttributeError):
             plan_failure=True
             raise

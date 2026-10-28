@@ -2,7 +2,7 @@
 from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 from typing import Literal
 from maoer_agent.core.limits import MAX_TOOL_CALLS
-from maoer_agent.contracts.tasks import ControlAction,UnsupportedAction,TaskPlan
+from maoer_agent.contracts.tasks import ControlAction,UnsupportedAction,TaskPlan,PageLookup
 
 class ControlIntent(BaseModel):
     model_config = ConfigDict(strict=True, extra='forbid')
@@ -79,20 +79,6 @@ class UnsupportedRequest(BaseModel):
     model_config = ConfigDict(strict=True, extra='forbid')
     actions: list[UnsupportedAction] = Field(default_factory=list, max_length=MAX_TOOL_CALLS)
     exclusive: bool = False
-
-
-class PageLookup(BaseModel):
-    model_config = ConfigDict(strict=True, extra='forbid')
-    requested: bool = False
-    target_kind: Literal['episode_page', 'episode_transcript', 'podcast_homepage', 'evidence_quote', 'episode_selection', 'none'] = 'episode_page'
-    selector_kind: Literal['none', 'reverse_source', 'source', 'newest', 'title_number', 'displayed_page'] = 'none'
-    selector_value: int = Field(default=0, ge=0, le=100000)
-    page_reference: str = Field(default='', max_length=40)
-    exclusive: bool = False
-    podcast_title: str = Field(default='', max_length=150)
-    episode_title: str = Field(default='', max_length=300)
-    query: str = Field(default='', max_length=300)
-    other_tasks: list[Literal['episode_analysis', 'recommendation', 'other_web_query', 'general_question']] = Field(default_factory=list, max_length=8)
 
 
 class EpisodeCriteria(BaseModel):

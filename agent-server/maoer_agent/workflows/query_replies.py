@@ -66,7 +66,9 @@ def reply_step(route, messages, names):
             and not any(route.get(k) for k in ('podcast','web','device','library'))
             and not route.get('unsupported_request',{}).get('actions')
             and all(g['kind']=='general' for g in route.get('task_plan',{}).get('goals',[]))):
-        return {'kind':'acknowledgement'}
+        goals=route.get('task_plan',{}).get('goals',[])
+        specified=(goals[0].get('delivery') or {}).get('exact_text','') if len(goals)==1 else ''
+        return {'kind':'acknowledgement','text':specified or '已记下。'}
     if route.get('library'):
         return None
     if (route.get('response_needs', {}).get('control_explanation') == 'cancel_sleep_timer'

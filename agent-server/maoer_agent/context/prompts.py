@@ -1,6 +1,7 @@
 """Model instructions kept separate from tool schemas and task execution."""
 import json
 from maoer_agent.memory.history import last_turn
+from maoer_agent.tools.definitions import TOOLS
 
 # Product knowledge, independent of whether this turn authorizes an operation.
 APPLICATION_BEHAVIOR = {
@@ -10,7 +11,7 @@ APPLICATION_BEHAVIOR = {
             'clock': 'elapsed_realtime', 'minute_timer_counts_while_paused': True,
             'expiry_effect': 'pause_playback', 'system_power_action': 'none'},
         'queue_loops_when_timer_off': True,
-        'playback_speed_values': [0.75, 1.0, 1.25, 1.5, 1.75, 2.0],
+        'playback_speed_values': TOOLS['set_playback_speed'].input_model.model_json_schema()['properties']['speed']['enum'],
         'current_state_source': 'get_playback_state',
     }
 }

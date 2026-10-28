@@ -5,11 +5,12 @@ from copy import deepcopy
 from pydantic import ValidationError
 from maoer_agent.tools.definitions import TOOLS
 from maoer_agent.tools.results import receipt_evidence
-from maoer_agent.memory.history import last_turn
+from maoer_agent.memory.history import last_turn, podcast_identities
 from maoer_agent.workflows.episode_pages import active as page_workflow_active
 from datetime import datetime,timezone,timedelta
 from maoer_agent.core.urls import public_links
 from maoer_agent.workflows.pagination import observed_page, page_continuation
+from maoer_agent.context.route import displayed_selection, displayed_episode_pages
 
 TERMINAL={'satisfied','failed','unknown','unavailable','waiting_user','blocked'}
 QUERY_KINDS={'public_query','catalog_query','library_query','general'}
@@ -78,6 +79,16 @@ def reconcile(route,previous,bindings,messages,control_blocked=False):
     rows={c['id']:(index,c,r) for index,(c,r) in enumerate(observations(last_turn(messages)))}
     for goal in goals(route):
         p=progress.setdefault(goal['id'],{'status':'pending','call_ids':[]})
+        if (goal['kind']=='catalog_query' and ready(goal,progress)
+                and route.get('response_needs',{}).get('titles_only')
+                and not episode_description_required(route,goal)):
+            target=goal.get('target') or (route.get('page_lookup',{}) if len(goals(route))==1 else {})
+            bound=displayed_selection(target,displayed_episode_pages(messages))
+            if bound:
+                page,item=bound
+                p.update(status='satisfied',display_reference=page['reference'],
+                         observed_identity={'podcast_id':item['podcast_id'],'episode_id':item['id']},
+                         observation_scope='displayed_history')
         linked=[(identity,*rows[identity]) for identity,gid in bindings.items() if gid==goal['id'] and identity in rows]
         linked.sort(key=lambda row:row[1]);p['call_ids']=[row[0] for row in linked]
         if goal['kind'] in ('control','device_query') and linked:
@@ -127,6 +138,82 @@ def matches(goal,name):
         or (goal['kind']=='general' and not spec.changes_state and spec.scope in {'web','podcast','library'}))
 
 
+def evidence_matches(goal,name,route):
+    if goal['kind']=='general':
+        scopes={scope for flag,scope in (('web','web'),('podcast','podcast'),('library','library')) if route.get(flag)}
+        if scopes:return not TOOLS[name].changes_state and TOOLS[name].scope in scopes
+    return matches(goal,name)
+
+
+def evidence_tools(route,progress,available):
+    """Supplementary reads serve ready, unfinished goals, not spare capabilities."""
+    plan=goals(route)
+    readonly=[d for d in available if not TOOLS[d['function']['name']].changes_state]
+    if not plan:return readonly
+    active=[g for g in plan if progress.get(g['id'],{}).get('status','pending') not in TERMINAL and ready(g,progress)]
+    return [d for d in readonly if any(evidence_matches(g,d['function']['name'],route) for g in active)]
+
+
+def lookup_goal(route,progress,lookup):
+    plan=goals(route)
+    if not plan:return lookup.goal_id
+    choices=[g for g in plan if progress.get(g['id'],{}).get('status','pending') not in TERMINAL
+             and ready(g,progress) and evidence_matches(g,lookup.name,route)]
+    if lookup.goal_id:
+        if not any(g['id']==lookup.goal_id for g in choices):raise ValueError('Lookup does not serve its unfinished goal')
+        return lookup.goal_id
+    if len(choices)!=1:raise ValueError('Lookup needs its matching unfinished goal_id')
+    return choices[0]['id']
+
+
+def close_failed_queries(route,progress,messages,names,sources):
+    """A receipt proves a failed attempt; absent relevant capabilities close it."""
+    result=deepcopy(progress)
+    rows=observations(last_turn(messages))
+    citable={s['number'] for s in sources if s.get('kind')!='web' or s.get('document_id') or web_delivery(route)=='results'}
+    for goal in goals(route):
+        p=result[goal['id']]
+        if (goal['kind'] not in QUERY_KINDS-{'conversation_query'} or p.get('status') in TERMINAL
+                or not ready(goal,result) or any(evidence_matches(goal,n,route) for n in names)):continue
+        linked=[(c,r) for c,r in rows if c['id'] in p.get('call_ids',[]) and evidence_matches(goal,c['name'],route)]
+        failures=[(c,r) for c,r in linked if r.get('status') in {'error','unknown'}]
+        related=linked or [(c,r) for c,r in rows if evidence_matches(goal,c['name'],route)]
+        has_evidence=any(item.get('citation') in citable for c,r in related if r.get('status')=='ok'
+                         for item in r.get('items',[]))
+        own_failure=bool(failures)
+        if not linked:failures=[(c,r) for c,r in related if r.get('status') in {'error','unknown'}]
+        if not failures or has_evidence:continue
+        call,receipt=failures[-1]
+        failure={'call_id':call['id'],'tool':call['name'],'status':receipt['status'] if own_failure else 'unavailable',
+                 'code':receipt.get('code') or 'tool_result_unverified'}
+        p.update(status='unavailable',query_failure=failure,reason=failure['code'],proof_calls=[call['id']],
+                 reviewed_calls=list(p.get('call_ids',[])))
+    return result
+
+
+def query_failures(route,progress):
+    return [{'goal_id':g['id'],'request':g['request'],**progress[g['id']]['query_failure']}
+            for g in goals(route) if progress.get(g['id'],{}).get('query_failure')]
+
+
+def answer_route(route,progress):
+    failures=query_failures(route,progress)
+    if not failures:return route
+    closed={f['goal_id'] for f in failures}
+    return {**route,'task_plan':{**route.get('task_plan',{}),'goals':[g for g in goals(route) if g['id'] not in closed]},
+            'query_failures':failures}
+
+
+def failure_step(route,progress,messages):
+    failures=query_failures(route,progress)
+    if not failures or not complete(route,progress):return None
+    closed={f['goal_id'] for f in failures}
+    if any(g['id'] not in closed and g['kind']!='control' for g in goals(route)):return None
+    receipts=[{'name':c['name'],'arguments':c['arguments'],'result':r} for c,r in observations(last_turn(messages))
+              if TOOLS[c['name']].changes_state]
+    return {'kind':'query_failures','failures':failures,'receipts':receipts}
+
+
 def scope(route,progress,available,allowed):
     plan=goals(route)
     if not plan:return available,allowed
@@ -134,12 +221,13 @@ def scope(route,progress,available,allowed):
     query_ready=any(g['kind'] in QUERY_KINDS for g in active)
     ordered_state_waiting=any(g['kind']=='device_query' and progress.get(g['id'],{}).get('status','pending') not in TERMINAL and not ready(g,progress) for g in plan)
     finished=all(progress.get(g['id'],{}).get('status') in TERMINAL for g in plan)
+    closed_query=any(p.get('query_failure') for p in progress.values())
     names=set()
     for name in allowed:
         if any(matches(g,name) for g in active):names.add(name)
         elif not TOOLS[name].changes_state:
             if finished:names.add(name)
-            elif query_ready and (name!='get_playback_state' or not ordered_state_waiting):names.add(name)
+            elif query_ready and not closed_query and (name!='get_playback_state' or not ordered_state_waiting):names.add(name)
             elif any(g['kind']=='control' and g.get('action')=='play_episode' for g in active) and TOOLS[name].scope in ('podcast','device'):
                 names.add(name)
     # No pending ordered state goal blocks a new, model-selected state read.
@@ -150,9 +238,13 @@ def scope(route,progress,available,allowed):
     return [d for d in available if d['function']['name'] in names],names
 
 
-def bind(route,progress,previous,calls):
+def bind(route,progress,previous,calls,messages=()):
     bindings=dict(previous);assigned=set()
     for call in calls:
+        bound=next((g for g in goals(route) if g['id']==previous.get(call['id']) and matches(g,call['name'])
+                    and ready(g,progress) and progress.get(g['id'],{}).get('status') not in TERMINAL),None)
+        if bound:
+            bindings[call['id']]=bound['id'];assigned.add(bound['id']);continue
         choices=[g for g in goals(route) if matches(g,call['name']) and ready(g,progress)
                  and (not TOOLS[call['name']].changes_state or progress.get(g['id'],{}).get('status','pending') not in TERMINAL)
                  and (g['kind']!='control' or g['id'] not in assigned)]
@@ -161,6 +253,17 @@ def bind(route,progress,previous,calls):
             queries=[g for g in goals(route) if g['kind'] in QUERY_KINDS-{'general'} and ready(g,progress)
                      and progress.get(g['id'],{}).get('status','pending') not in TERMINAL]
             if len(queries)==1:choices=queries
+        if len(choices)>1 and all(g['kind']=='catalog_query' for g in choices):
+            args=call['arguments'];names=podcast_identities(messages)
+            def identifies(goal):
+                target=goal.get('target') or {};page=goal.get('page_request') or {}
+                title=target.get('podcast_title') or page.get('podcast_title')
+                if args.get('podcast_id'):
+                    return (target.get('podcast_id')==args['podcast_id'] or bool(title and names.get(args['podcast_id'])==title))
+                query=args.get('query','').strip()
+                return bool(query and query in {goal.get('query','').strip(),title})
+            choices=[g for g in choices if identifies(g)]
+            if len(choices)!=1:continue
         if choices:
             bindings[call['id']]=choices[0]['id'];assigned.add(choices[0]['id'])
     return bindings
@@ -210,7 +313,8 @@ def reviewed(route,progress,assessments,sources,messages,allowed,blocks=None,mem
     plan=goals(route)
     if not plan:return progress
     assessments={a.id:a for a in assessments}
-    if set(assessments)!={g['id'] for g in plan}:raise ValueError('Every user goal needs an assessment')
+    if set(assessments)!={g['id'] for g in plan if not progress.get(g['id'],{}).get('query_failure')}:
+        raise ValueError('Every remaining user goal needs an assessment')
     result=deepcopy(progress);numbers={s['number'] for s in sources}
     observed=observations(last_turn(messages))
     calls={c['id']:r for c,r in observed}
@@ -218,6 +322,7 @@ def reviewed(route,progress,assessments,sources,messages,allowed,blocks=None,mem
         and not TOOLS[c['name']].changes_state and TOOLS[c['name']].scope in {'web','podcast','library'}}
     today=datetime.now(timezone(timedelta(hours=8))).date().isoformat()
     for goal in plan:
+        if result[goal['id']].get('query_failure'):continue
         p=result[goal['id']];a=assessments[goal['id']]
         if any(n not in numbers for n in a.sources) or any(i not in calls for i in a.call_ids):
             raise ValueError('Goal proof must reference actual current evidence')

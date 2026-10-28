@@ -5,15 +5,22 @@ import re
 from maoer_agent.contracts.errors import ModelFailure
 from maoer_agent.memory.history import last_turn, PLAYBACK_SNAPSHOT_TOOLS
 from maoer_agent.workflows.episode_pages import observations
-from maoer_agent.context.route import episode_pages,displayed_episode_pages
+from maoer_agent.context.route import episode_pages,displayed_episode_pages,displayed_selection
 
 
 def normalize_selector(lookup, message, displayed_pages=()):
     """Apply the product's explicit numeric catalog grammar, not topic routing."""
-    explicit=re.search(r'作者|标题|期号|原始|RSS|\b(?:EP|Vol\.?|No\.?)\s*\d',message,re.IGNORECASE)
-    ordinal=re.search(r'第\s*([0-9]+|[零〇一二两三四五六七八九十百千]+)\s*[期条个集]',message)
-    if displayed_pages and ordinal and not explicit:
-        value=ordinal[1]
+    # A complete affirmative request clause can be followed by independent
+    # constraints. Never search arbitrary negated/quoted prose for an ordinal.
+    clause=re.split(r'[，,。；;！？!?]',message.strip(),maxsplit=1)[0].strip()
+    simple=re.fullmatch(r'(?:(?:请|帮我)\s*)?(?:(?:介绍|查询|查找|查一下|查|看看|说说)\s*)?'
+        r'(?:《(?P<podcast>[^》]{1,150})》\s*)?'
+        r'第(?P<number>[0-9]{1,6}|[零〇一二两三四五六七八九十百千]+)(?P<unit>期|条|个|集)'
+        r'(?:在讲什么|讲什么|的内容|是什么|的标题)?',clause)
+    tail=message[len(clause):]
+    if (simple and lookup.get('target_kind','none') in ('none','episode_selection')
+            and not re.search(r'(?:我指|按|用)\s*(?:作者|标题|期号|EP)',tail,re.IGNORECASE)):
+        value=simple['number']
         if value.isdecimal():number=int(value)
         else:
             digits=dict(zip('零〇一二两三四五六七八九',(0,0,1,2,2,3,4,5,6,7,8,9)))
@@ -22,23 +29,33 @@ def normalize_selector(lookup, message, displayed_pages=()):
                 if char in digits:part=digits[char]
                 else:number+=(part or 1)*{'十':10,'百':100,'千':1000}[char];part=0
             number+=part
-        page=displayed_pages[-1]
-        if (number>0 and (not lookup.get('podcast_title') or lookup['podcast_title']==page.get('podcast_title'))):
-            item=page['items'][number-1] if number<=len(page['items']) else {}
-            return {**lookup,'target_kind':'episode_selection','requested':False,'selector_kind':'displayed_page',
-                'selector_value':number,'page_reference':page['reference'],'episode_title':item.get('title',''),
-                'query':item.get('title',''),'podcast_title':page.get('podcast_title','')},False
-    if (not displayed_pages and ordinal and not explicit and ordinal[0].endswith(('个','条'))
-            and not lookup.get('podcast_title') and not lookup.get('episode_title')):
-        # A bare display ordinal has no relationship to the current player queue.
-        return {**lookup,'target_kind':'episode_selection','selector_kind':'displayed_page',
-                'page_reference':'','selector_value':0},False
+        title=simple['podcast'] or lookup.get('podcast_title','')
+        pages=[p for p in displayed_pages if not title or p.get('podcast_title')==title]
+        if 0<number<=100000:
+            if pages and simple['unit']!='集':
+                lookup={**lookup,'target_kind':'episode_selection','selector_kind':'displayed_page',
+                    'selector_value':number,'page_reference':pages[-1]['reference'],'podcast_title':title,
+                    'episode_id':'','podcast_id':'','episode_title':''}
+            elif simple['unit'] in ('集','期'):
+                lookup={**lookup,'target_kind':'episode_selection','requested':False,
+                    'selector_kind':'reverse_source' if simple['unit']=='集' else 'title_number',
+                    'selector_value':number,'podcast_title':title}
     # A relative release is not an absolute catalog ordinal inferred by the router.
     # Keep the actual historical list available to the semantic planner instead.
     if (re.search(r'(?:上|前|下|后)一[期集]', message)
             and not re.search(r'(?:第|期号|原始列表)\s*[零一二三四五六七八九十百千0-9]+', message)
             and lookup.get('selector_kind') in ('reverse_source', 'source', 'newest', 'title_number')):
         lookup = {**lookup, 'selector_kind': 'none', 'selector_value': 0}
+    if lookup.get('selector_kind') == 'displayed_page':
+        bound=displayed_selection(lookup,displayed_pages)
+        if bound:
+            page,item=bound
+            return {**lookup,'target_kind':'episode_selection','requested':False,
+                    'page_reference':page['reference'],'episode_title':item['title'],
+                    'podcast_title':page.get('podcast_title',''),'episode_id':item['id'],
+                    'podcast_id':item['podcast_id'],'query':item['title']},False
+        # Keep the unresolved relation for the existing clarification path.
+        return lookup,False
     title_query = re.fullmatch(r'(?:请\s*)?(?:帮我\s*)?(?:查询|查找|找|查)\s*《(?P<podcast>[^》]{1,150})》'
         r'标题(?:包含|含)[“「"](?P<title>[^”」"]{1,100})[”」"](?:的)?(?:那集|分集)'
         r'(?:[，,。；;]\s*(?:先别播放|不要播放|不播放|先列出来让我选))*[。.!！]?', message.strip())
@@ -53,11 +70,12 @@ def normalize_selector(lookup, message, displayed_pages=()):
     whole = re.fullmatch(r'(?:请\s*)?(?:帮我\s*)?(?:查询|查找|查一下|查|改查|找一下|定位|现在改要|这次我指的是)\s*'
         r'(?:(?:《(?P<podcast>[^》]{1,150})》|(?P<plain_podcast>[^，,。；;《》]{1,150}?))\s*)?(?P<selector>' + phrase + r')'
         r'(?:[，,。；;]\s*(?:先别播放|先不播放|不要播放|不播放))*[。.!！]?', message.strip(), re.IGNORECASE)
-    if not whole and lookup.get('target_kind') != 'episode_selection':
+    if not whole:
+        # Semantic selectors are already explicit. Do not extract another
+        # meaning from a negated, quoted or explanatory part of the sentence.
         return lookup, False
-    matched = re.search(phrase, whole['selector'] if whole else message, re.IGNORECASE)
-    if not matched:
-        return lookup, False
+    matched = re.fullmatch(phrase, whole['selector'], re.IGNORECASE)
+    if not matched:return lookup, False
     text = matched[0]
     number = int(re.search(r'[0-9]+', text)[0])
     if not 1 <= number <= 100000:
@@ -73,14 +91,28 @@ def normalize_selector(lookup, message, displayed_pages=()):
 
 def selection_step(route, messages, names):
     lookup = route.get('page_lookup', {})
+    if lookup.get('target_kind')=='evidence_quote':
+        # Old source numbers are answer-local. Acquire a new excerpt using only
+        # an unambiguous episode identity observed in actual paired receipts.
+        known={ (i['podcast_id'],i['id']):i for _,r in observations(messages) if r.get('status')=='ok'
+                for i in r.get('items',[]) if i.get('kind')=='episode' and i.get('podcast_id') and i.get('id') }
+        matches=[i for i in known.values() if
+            (lookup.get('episode_id') and i['id']==lookup['episode_id'] and i['podcast_id']==lookup.get('podcast_id'))
+            or (lookup.get('episode_title') and i.get('title')==lookup['episode_title']
+                and (not lookup.get('podcast_title') or i.get('podcast_title')==lookup['podcast_title']))]
+        if len(matches)==1 and 'read_episode_description' in names:
+            item=matches[0];args={'podcast_id':item['podcast_id'],'episode_id':item['id'],'offset':0}
+            if not any(c['name']=='read_episode_description' and c['arguments']==args for c,_ in observations(last_turn(messages))):
+                return {'kind':'call','name':'read_episode_description','arguments':args}
+        return None
     kind, number = lookup.get('selector_kind', 'none'), lookup.get('selector_value', 0)
     if lookup.get('target_kind') != 'episode_selection' or kind == 'none' or not number:
         return None
     if kind == 'displayed_page':
-        page = next((p for p in episode_pages(messages)+displayed_episode_pages(messages) if p['reference'] == lookup.get('page_reference')), None)
-        if not page or number > len(page['items']):
+        bound=displayed_selection(lookup,episode_pages(messages)+displayed_episode_pages(messages))
+        if not bound:
             return None  # Missing/ambiguous display context must be clarified by the model.
-        item = page['items'][number - 1]
+        page,item=bound
         current = observations(last_turn(messages))
         if route.get('response_needs', {}).get('brief_episode_intro'):
             args = {'podcast_id': item['podcast_id'], 'episode_id': item['id'], 'offset': 0}
@@ -116,6 +148,23 @@ def selection_step(route, messages, names):
     if 'list_episodes' in names:
         return {'kind': 'call', 'name': 'list_episodes', 'arguments': args}
     return None
+
+
+def resolved_episode(route,messages):
+    """The single queried episode stays the same subject during delivery."""
+    plan=route.get('task_plan',{}).get('goals',[])
+    if len(plan)!=1 or plan[0]['kind']!='catalog_query':return None
+    needs=route.get('response_needs',{})
+    if (route.get('episode_criteria',{}).get('requested') or needs.get('retrieval_statistics')
+            or plan[0].get('page_request')):return None
+    read={}
+    for call,result in observations(last_turn(messages)):
+        if call['name']!='read_episode_description' or result.get('status')!='ok':continue
+        for item in result.get('items',[]):
+            if (item.get('kind')=='episode' and item.get('id')==call['arguments'].get('episode_id')
+                    and item.get('podcast_id')==call['arguments'].get('podcast_id') and item.get('evidence')):
+                read[(item['podcast_id'],item['id'])]={k:item[k] for k in ('id','podcast_id','title','podcast_title') if k in item}
+    return next(iter(read.values())) if len(read)==1 else None
 
 
 def selection_identity_refresh(messages, calls, known, run_id):

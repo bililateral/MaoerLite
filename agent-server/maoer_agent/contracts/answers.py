@@ -5,6 +5,16 @@ from maoer_agent.contracts.tasks import ControlAction
 import re
 import json
 
+MAX_BLOCK_SOURCES = 48
+
+
+def citation_units(text):
+    """Paragraphs and list items own citations; fenced literals stay intact."""
+    prose = re.sub(r'(?ms)^ {0,3}(`{3,}|~{3,})[^\n]*\n.*?^ {0,3}\1[ \t]*(?=\n|$)',
+                   '<literal>', text.replace('\r\n', '\n').replace('\r', '\n'))
+    return [part for part in re.split(r'\n[ \t]*\n|(?=^ {0,3}(?:\d+[.)]|[-+*])[ \t]+\S)',
+                                      prose, flags=re.MULTILINE) if part.strip()]
+
 
 def source_view(source):
     """The factual source fields shared by model input and quote validation."""
@@ -67,30 +77,114 @@ def receipt_quote_matches(quote,text):
 class AnswerBlock(BaseModel):
     model_config = ConfigDict(strict=True, extra='forbid')
     text: str = Field(min_length=1, max_length=16000)
-    sources: list[int] = Field(default_factory=list, max_length=48)
+    sources: list[int] = Field(default_factory=list, max_length=MAX_BLOCK_SOURCES)
+    episode_id: str = Field(default='', max_length=2000)
 
     @field_validator('sources',mode='before')
     @classmethod
     def canonical_sources(cls,value):return source_numbers(value)
 
 
+class QuotedBlock(BaseModel):
+    model_config = ConfigDict(strict=True, extra='forbid')
+    quote_reference: str = Field(min_length=1,max_length=40)
+    sources: list[int] = Field(min_length=1,max_length=MAX_BLOCK_SOURCES)
+    episode_id: str = Field(default='',max_length=2000)
+
+    @field_validator('sources',mode='before')
+    @classmethod
+    def canonical_sources(cls,value):return source_numbers(value)
+
+    @property
+    def text(self):return ''
+
+
 class FactualAnswer(BaseModel):
     model_config = ConfigDict(strict=True, extra='forbid')
-    blocks: list[AnswerBlock] = Field(min_length=1, max_length=48)
+    blocks: list[AnswerBlock | QuotedBlock] = Field(min_length=1, max_length=48)
     background: list[AnswerBlock] = Field(default_factory=list, max_length=48)
 
-    def checked_blocks(self, available):
+    def checked_blocks(self, available, *, local_citations=False, episode=None, quote_refs=None):
         if any(number not in available for block in self.blocks for number in block.sources):
             raise ValueError('Unknown answer source')
-        if sum(len(block.text) for block in self.blocks) > 16000:
+        if local_citations and any(block.sources and len(citation_units(block.text)) > 1 for block in self.blocks):
+            raise ValueError('Each sourced paragraph or list item needs its own block and matching sources')
+        if episode and any(block.episode_id != episode['id'] for block in self.blocks):
+            raise ValueError('Every block must preserve the resolved episode identity: '+episode['id'])
+        if quote_refs is not None and not any(isinstance(block,QuotedBlock) for block in self.blocks):
+            raise ValueError('An original-text request needs a quote_reference from the supplied original excerpts')
+        blocks=[]
+        for block in self.blocks:
+            text=block.text
+            if isinstance(block,QuotedBlock):
+                proof=(quote_refs or {}).get(block.quote_reference)
+                if not proof or set(block.sources)!={proof['number']}:
+                    raise ValueError('A quoted excerpt must use its bound source and supplied quote_reference')
+                # Markdown escaping preserves publisher citation brackets as
+                # literal text instead of turning them into this answer's IDs.
+                original=re.sub(r'(?<!\\)\[(\d+)\]',r'\\[\1\\]',proof['quote'])
+                text='\n'.join('> '+line for line in original.splitlines())
+            blocks.append({'text':text,'sources':list(dict.fromkeys(block.sources)),
+                **({'episode_id':block.episode_id} if block.episode_id else {})})
+        if sum(len(block['text']) for block in blocks)>16000:
             raise ValueError('Answer exceeds message contract')
-        return [{'text': block.text, 'sources': list(dict.fromkeys(block.sources))} for block in self.blocks]
+        return blocks
 
 
 class EvidenceQuote(BaseModel):
     model_config = ConfigDict(strict=True, extra='forbid')
     number: int | str
     quote: str = Field(min_length=1, max_length=600)
+
+
+class EvidenceReference(BaseModel):
+    model_config = ConfigDict(strict=True, extra='forbid')
+    reference: str = Field(min_length=1, max_length=40)
+
+
+def quotation_evidence(sources):
+    """Each selectable quotation is an unchanged span of an actual source body."""
+    bank={}
+    for source in sources:
+        for line in source.get('evidence','').splitlines():
+            if not line.strip():continue
+            for offset in range(0,len(line),500):
+                if len(bank)>=192:return bank
+                bank['source'+str(source['number'])+'_quote'+str(len(bank)+1)]={
+                    'number':source['number'],'quote':line[offset:offset+500]}
+    return bank
+
+
+def review_evidence(sources, receipts):
+    """Named exact excerpts avoid asking the model to reserialize evidence."""
+    bank = {}
+    def add(number, text):
+        if len(bank)>=192 or not isinstance(text,str) or not text.strip() or len(text)>600:return
+        value={'number':number,'quote':text}
+        if value not in bank.values():
+            prefix='source'+str(number) if type(number) is int else 'memory' if number.startswith('conversation_') else 'receipt'
+            bank[prefix+'_'+str(len(bank)+1)]=value
+    for source in sources:
+        number=source['number']
+        for key in ('title','podcast_title','published','published_display'):
+            add(number,source.get(key))
+        body=source.get('evidence','')
+        # Each window is a contiguous original excerpt. The full source remains available.
+        for offset in range(0,min(len(body),2000),500):add(number,body[offset:offset+500])
+    def fields(number,value):
+        if isinstance(value,dict):
+            for key,item in value.items():
+                if not isinstance(item,(dict,list)):
+                    add(number,json.dumps({key:item},ensure_ascii=False))
+                elif key=='items':
+                    for row in item[:12]:fields(number,row)
+                elif key in ('result','arguments'):fields(number,item)
+    for number,text in receipts.items():
+        if number.startswith('conversation_'):
+            for offset in range(0,min(len(text),2000),500):add(number,text[offset:offset+500])
+        else:
+            fields(number,json.loads(text))
+    return bank
 
 
 class ClaimCheck(BaseModel):
@@ -104,6 +198,7 @@ class EvidenceLookup(BaseModel):
     model_config = ConfigDict(strict=True, extra='forbid')
     name: str = Field(min_length=1, max_length=64)
     arguments: dict
+    goal_id: str = Field(default='', max_length=40, description='本次补查服务的未完成目标id；只有一个匹配目标时可留空')
 
     @field_validator('name')
     @classmethod
@@ -112,13 +207,20 @@ class EvidenceLookup(BaseModel):
         return value
 
 
+class EvidencePlan(BaseModel):
+    """Request evidence without asserting that any user goal is satisfied."""
+    model_config = ConfigDict(strict=True, extra='forbid')
+    lookup: EvidenceLookup | None = None
+    reason: str = Field(default='', max_length=500)
+
+
 class GoalAssessment(BaseModel):
     model_config=ConfigDict(strict=True,extra='forbid')
     id: str=Field(min_length=1,max_length=40)
     status: Literal['satisfied','needs_evidence','unavailable','waiting']
-    sources: list[int]=Field(default_factory=list,max_length=48)
-    call_ids: list[str]=Field(default_factory=list,max_length=36)
-    memory_ids: list[str]=Field(default_factory=list,max_length=36)
+    sources: list[int]=Field(default_factory=list,max_length=48,description='资料整数编号；工具回执字符串ID填call_ids，对话证据ID填memory_ids')
+    call_ids: list[str]=Field(default_factory=list,max_length=36,description='本轮实际工具回执call_id，不填入sources')
+    memory_ids: list[str]=Field(default_factory=list,max_length=36,description='已给定的用户原话或摘要证据ID，必须有对应原文校核')
     through_date: str=Field(default='',max_length=10)
     note: str=Field(default='',max_length=500)
 
@@ -179,7 +281,7 @@ class DraftBlockCheck(BaseModel):
     model_config = ConfigDict(strict=True, extra='forbid')
     block: int = Field(ge=0, lt=48)
     issue: Literal['none', 'unsupported', 'conflict', 'outdated']
-    evidence: list[EvidenceQuote] = Field(default_factory=list, max_length=8)
+    evidence: list[EvidenceQuote | EvidenceReference] = Field(default_factory=list, max_length=MAX_BLOCK_SOURCES)
     problem: DraftProblem | None = None
 
 
@@ -192,10 +294,19 @@ class DraftReview(BaseModel):
     goals: list[GoalAssessment] = Field(default_factory=list, max_length=36)
     question: str = Field(default='', max_length=500)
 
-    def checked(self, draft, sources, allowed, receipts=None, source_aliases=None):
+    def checked(self, draft, sources, allowed, receipts=None, source_aliases=None, evidence_refs=None, episode=None):
+        for check in self.checks:
+            resolved=[]
+            for proof in check.evidence:
+                if isinstance(proof,EvidenceReference):
+                    if proof.reference not in (evidence_refs or {}):raise ValueError('Unknown evidence reference: '+proof.reference)
+                    proof=EvidenceQuote.model_validate(evidence_refs[proof.reference])
+                resolved.append(proof)
+            check.evidence=resolved
+        available_sources = {source['number'] for source in sources}
         indices = [check.block for check in self.checks]
         if len(set(indices)) != len(indices) or any(i >= len(draft) for i in indices):
-            raise ValueError('Review must address distinct existing draft blocks')
+            raise ValueError(f'Review checks need one entry per existing block; received {indices}, existing {list(range(len(draft)))}')
         issues = [check for check in self.checks if check.issue != 'none']
         for check in issues:
             problem = check.problem
@@ -209,8 +320,16 @@ class DraftReview(BaseModel):
                 raise ValueError('Every delivered draft block must pass review')
             for check in self.checks:
                 numbers = source_numbers([quote.number for quote in check.evidence])
-                if not set(draft[check.block].get('sources', [])).issubset(numbers):
-                    raise ValueError('Every draft citation needs checked source evidence')
+                missing=set(draft[check.block].get('sources', []))-set(numbers)
+                if missing:
+                    references={n:[key for key,value in (evidence_refs or {}).items() if value['number']==n]
+                                for n in sorted(missing)}
+                    raise ValueError('Every draft citation needs checked source evidence: '+json.dumps({
+                        'block':check.block,'missing_source_numbers':sorted(missing),
+                        'source_reference_choices':references,'received_evidence_numbers':numbers},ensure_ascii=False))
+                factual = {number for number in numbers if number in available_sources}
+                if not factual.issubset(draft[check.block].get('sources', [])):
+                    raise ValueError('Checked factual sources must be cited in their own draft block')
         if self.decision == 'revise' and (not issues or self.lookup is not None or self.question):
             raise ValueError('Revision needs a draft defect and cannot execute or deliver')
         # Keep the existing exact-quote, source, receipt and lookup validation.
@@ -222,7 +341,7 @@ class DraftReview(BaseModel):
         if self.decision == 'revise':return None
         if self.lookup is not None:raise ValueError('A ready answer cannot execute a lookup')
         if not draft and self.question:return []
-        return FactualAnswer(blocks=draft).checked_blocks({s['number'] for s in sources})
+        return FactualAnswer(blocks=draft).checked_blocks(available_sources, local_citations=True, episode=episode)
 
     def revision_feedback(self, draft):
         """Carry the checked defect to composition without inventing replacement prose."""

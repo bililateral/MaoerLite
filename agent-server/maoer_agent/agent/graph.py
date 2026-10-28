@@ -14,7 +14,7 @@ from maoer_agent.core.errors import error_message
 from maoer_agent.tools.definitions import validated_calls
 from maoer_agent.memory.history import last_turn, remember, replay_references
 from maoer_agent.memory.summary import MAX_BATCHES, SUMMARY_TIMEOUT, batch, build_summary, SummaryFormatError
-from maoer_agent.workflows.selection import episode_selection_question, selection_step
+from maoer_agent.workflows.selection import episode_selection_question, selection_step, resolved_episode
 from maoer_agent.workflows.planning import prepare_calls, tool_scope
 from maoer_agent.agent.state import State, MAX_TOOL_CALLS, MAX_MODEL_ROUNDS
 from maoer_agent.workflows.intent import classify, allowed_tools, DEVICE_TOOLS
@@ -22,8 +22,9 @@ from maoer_agent.tools.definitions import SERVER_TOOLS, TOOLS
 from maoer_agent.research.sources import annotate, valid_citations
 from maoer_agent.tools.results import checked_result, outcome_facts, receipt_evidence
 from maoer_agent.context.assembler import AnswerInput, ContextAssembler, factual_delivery_needed, conversation_proofs
-from maoer_agent.contracts.answers import FactualAnswer, AnswerReview, DraftReview
-from maoer_agent.contracts.model import JsonMessages
+from maoer_agent.contracts.answers import FactualAnswer, AnswerReview, DraftReview, EvidencePlan, quotation_evidence
+from maoer_agent.contracts.model import JsonMessages, model_call_context
+from maoer_agent.contracts.tasks import checked_reply
 from maoer_agent.contracts.execution import ResearchContext, PageView
 from maoer_agent.core.limits import MAX_MODEL_ATTEMPTS
 from maoer_agent.workflows import episode_pages
@@ -57,9 +58,13 @@ class AgentGraph:
             raise ModelFailure('model_attempt_budget_exhausted')
         usage[purpose] = usage.get(purpose, 0) + 1
         self.store.update(run_id, model_attempts=usage)
-        if purpose in {'intent','recovery_intent','answer_delivery','evidence_review'}:
+        if purpose in {'intent','recovery_intent','answer_delivery','evidence_review','evidence_plan'}:
             messages=JsonMessages(messages)
-        return await self.model(settings, messages, tools, publish)
+        token=model_call_context.set({'run_id':run_id,'purpose':purpose,'attempt':usage[purpose]})
+        try:
+            return await self.model(settings, messages, tools, publish)
+        finally:
+            model_call_context.reset(token)
 
     def record_result(self, run_id, receipt, call=None):
         run = self.get_run(run_id)
@@ -149,10 +154,12 @@ class AgentGraph:
 
 
     def answer_input(self, state, available, final_only):
+        progress=self.get_run(state['run_id']).get('goal_progress',{})
+        route=task_goals.answer_route(state.get('route',{}),progress)
         return AnswerInput(state['messages'], state.get('memory', {}), state.get('summary', {}),
             state.get('summary_pending', 0), answer_sources(self.get_run(state['run_id']).get('sources', []), last_turn(state['messages']),web_delivery(state.get('route',{}))),
-            {**state.get('route', {}),'goal_progress':self.get_run(state['run_id']).get('goal_progress',{}),
-             'goal_view':task_goals.view(state.get('route',{}),self.get_run(state['run_id']).get('goal_progress',{}))}, available, state.get('extended_episodes', False),
+            {**route,'goal_progress':progress,'goal_view':task_goals.view(route,progress),
+             'resolved_episode':resolved_episode(route,state['messages'])}, available, state.get('extended_episodes', False),
             state.get('research', False), final_only, self.settings.model,
             self.settings.context_budget_bytes, self.settings.agent_thinking)
 
@@ -180,7 +187,13 @@ class AgentGraph:
             try:
                 message = await self.invoke_model(run_id, 'main', self.settings,
                                            messages, [] if final_only else available, publish)
+                if (not message.get('tool_calls') and not factual_delivery_needed(state.get('route',{}))
+                        and not task_goals.goals(state.get('route',{}))):
+                    checked_reply(message.get('content') or '',state.get('route',{}))
                 break
+            except ValueError as error:
+                if attempt:raise ModelFailure('invalid_model_response') from None
+                messages.insert(1,{'role':'system','content':'交付约束未满足：'+str(error)})
             except ModelFailure as exc:
                 if (not exc.retryable or attempt == 2 or waited + exc.delay > 120
                         or time.monotonic() - started + exc.delay >= 180):
@@ -193,7 +206,8 @@ class AgentGraph:
 
     async def factual_reply(self, state, available, correction=None):
         request = self.answer_input(state, [], True)
-        messages = self.context.factual_delivery(request, self.query_renderer, correction)
+        feedback = correction if correction is not None else self.get_run(state['run_id']).get('answer_feedback')
+        messages = self.context.factual_delivery(request, self.query_renderer, feedback)
         source_numbers = {source['number'] for source in request.sources}
         async def discard(text):
             pass  # Composition JSON and unverified text never enter the UI.
@@ -217,28 +231,34 @@ class AgentGraph:
                 if text.startswith('```'):
                     text = text.split('\n', 1)[1].rsplit('```', 1)[0]
                 delivery = FactualAnswer.model_validate_json(text)
-                blocks = delivery.checked_blocks(source_numbers)
+                quotes=quotation_evidence(request.sources) if request.route.get('page_lookup',{}).get('target_kind')=='evidence_quote' else None
+                blocks = delivery.checked_blocks(source_numbers, local_citations=True, episode=request.route.get('resolved_episode'),quote_refs=quotes)
                 answer = self.query_renderer({'kind': 'factual_answer', 'blocks': blocks,
                     'sources': request.sources, 'link_sources': web_source_links(request.route), 'include_source_links': web_source_links(request.route)})
                 if not valid_citations(answer, request.sources):
                     raise ValueError('Invalid inline source')
-                self.store.update(state['run_id'], answer_delivery=delivery.model_dump())
+                checked_reply(answer, request.route)
+                self.store.update(state['run_id'], answer_delivery=delivery.model_dump(exclude_none=True))
                 break
             except (ValueError, TypeError, KeyError) as error:
                 failures = list(self.get_run(state['run_id']).get('answer_delivery_failures', []))
-                failures.append({'kind': type(error).__name__, 'content': reply.get('content') or ''})
+                failures.append({'kind': type(error).__name__, 'reason': str(error), 'content': reply.get('content') or ''})
                 self.store.update(state['run_id'], answer_delivery_failures=failures)
                 if attempt:
                     raise ModelFailure('invalid_citation') from None
                 messages = [messages[0], {'role': 'system', 'content':
-                    '上次交付未符合JSON或来源契约。按给定结构返回正文块及实际可用编号；不执行工具。'}, *messages[1:]]
+                    '上次交付未符合JSON或来源契约。按具体错误修正正文块及实际可用编号，不执行工具。'
+                    +json.dumps({'contract_error':[
+                        {'path':list(item['loc']),'type':item['type']}
+                        for item in error.errors(include_url=False,include_input=False)]
+                        if hasattr(error,'errors') else str(error)},ensure_ascii=False)}, *messages[1:]]
         message = {'role': 'assistant', 'content': answer}
         if task_goals.goals(state.get('route', {})) or any(s.get('kind') == 'web' and s.get('document_id') for s in request.sources):
             return await self.review_reply(state, message, available, blocks, revision_allowed=correction is None)
         return message
 
     async def review_reply(self, state, draft, available, draft_blocks=None, revision_allowed=True):
-        readonly = [d for d in available if not TOOLS[d['function']['name']].changes_state]
+        readonly = task_goals.evidence_tools(state.get('route',{}),self.get_run(state['run_id']).get('goal_progress',{}),available)
         request = self.answer_input(state, readonly, not bool(readonly))
         run_id = state['run_id']
         # The no-source planning branch may propose plain text before composition.
@@ -248,10 +268,18 @@ class AgentGraph:
         draft_blocks = [dict(b, sources=list(b.get('sources', []))) for b in draft_blocks]
         messages = self.context.evidence_review(request, self.query_renderer, draft_blocks, self.get_run(run_id).get('sources', []))
         names = {d['function']['name'] for d in readonly}
+        proofs=self.context.review_proofs(request)
+        previous_issues=[]
+        receipts={row['call_id']:json.dumps(row,ensure_ascii=False)
+                  for row in self.context.review_receipts(state['messages'],request.route.get('response_needs',{}).get('retrieval_statistics',False))}
+        memory_proofs=conversation_proofs(request)
+        receipts.update(memory_proofs)
+        aliases={row['call_id']:[item for item in row['result'].get('items',[]) if item.get('evidence')
+            and (item.get('kind')!='web' or item.get('document_id'))] for row in receipt_evidence(last_turn(state['messages']))}
         async def discard(text): pass
         for attempt in range(2):
             try:
-                reply = await self.invoke_model(run_id, 'evidence_review', self.settings, messages, [], discard)
+                reply = await self.invoke_model(run_id, 'evidence_review', replace(self.settings,agent_thinking=False), messages, [], discard)
             except ModelFailure as exc:
                 if attempt or exc.code != 'incomplete_model_response' or exc.details.get('finish_reason') != 'length':
                     raise
@@ -269,13 +297,10 @@ class AgentGraph:
                 if text.startswith('```'):
                     text = text.split('\n', 1)[1].rsplit('```', 1)[0]
                 decision = DraftReview.model_validate_json(text)
-                receipts = {row['call_id']:json.dumps(row,ensure_ascii=False)
-                            for row in self.context.review_receipts(state['messages'],request.route.get('response_needs',{}).get('retrieval_statistics',False))}
-                memory_proofs=conversation_proofs(request)
-                receipts.update(memory_proofs)
-                aliases={row['call_id']:[item for item in row['result'].get('items',[]) if item.get('evidence')
-                    and (item.get('kind')!='web' or item.get('document_id'))] for row in receipt_evidence(last_turn(state['messages']))}
-                blocks = decision.checked(draft_blocks, request.sources, names, receipts,aliases)
+                if decision.decision=='ready' and previous_issues:
+                    raise ValueError('The unchanged draft still has the previously evidenced defects; preserve their diagnosis for revision')
+                blocks = decision.checked(draft_blocks, request.sources, names, receipts,aliases,
+                    evidence_refs=proofs,episode=request.route.get('resolved_episode'))
                 audits = list(self.get_run(run_id).get('draft_reviews', []))
                 self.store.update(run_id, draft_reviews=audits + [{'draft': draft_blocks, **decision.model_dump()}])
                 if decision.decision == 'revise':
@@ -287,6 +312,7 @@ class AgentGraph:
                         correction=decision.revision_feedback(draft_blocks))
                 if decision.decision == 'needs_evidence':
                     call = decision.lookup
+                    call.goal_id=task_goals.lookup_goal(state.get('route',{}),self.get_run(run_id).get('goal_progress',{}),call)
                     message = {'role': 'assistant', 'content': None, 'tool_calls': [{
                         'id': 'evidence_' + run_id + '_' + str(state.get('tool_count', 0)), 'type': 'function',
                         'function': {'name': call.name, 'arguments': json.dumps(call.arguments, ensure_ascii=False)}}]}
@@ -301,8 +327,14 @@ class AgentGraph:
                 progress=task_goals.reviewed(state.get('route',{}),self.get_run(run_id).get('goal_progress',{}),
                     decision.goals,request.sources,state['messages'],names,blocks,memory_proofs)
                 quoted={q.number for check in decision.checks for q in check.evidence}
-                if any(a.status=='satisfied' and a.memory_ids and not set(a.memory_ids).issubset(quoted) for a in decision.goals):
-                    raise ValueError('Recalled statements need checked excerpts from their conversation evidence')
+                missing_memory={a.id:sorted(set(a.memory_ids)-quoted) for a in decision.goals
+                    if a.status=='satisfied' and set(a.memory_ids)-quoted}
+                if missing_memory:
+                    raise ValueError('Recalled statements need checked excerpts from their conversation evidence: '+json.dumps({
+                        'missing_memory_ids_by_goal':missing_memory,
+                        'reference_choices':{identity:[key for key,value in proofs.items() if value['number']==identity]
+                            for identities in missing_memory.values() for identity in identities},
+                        'goal_kinds':{g['id']:g['kind'] for g in request.route.get('task_plan',{}).get('goals',[])}},ensure_ascii=False))
                 if decision.decision=='ready':
                     if any(p.get('status')=='waiting_user' for p in progress.values()) and not decision.question.strip():
                         raise ValueError('A waiting-user goal requires an explicit clarification question')
@@ -318,7 +350,16 @@ class AgentGraph:
                 snapshot = {**decision.model_dump(), 'blocks': blocks or [], 'background': [],
                     'checks': [{'claim': draft_blocks[c.block]['text'][:600], 'issue': c.issue,
                         'evidence': [q.model_dump() for q in c.evidence]} for c in decision.checks]}
-                self.store.update(run_id, evidence_reviews=reviews + [snapshot],goal_progress=progress)
+                feedback={}
+                if decision.decision=='needs_evidence' and any(c.issue!='none' for c in decision.checks):
+                    feedback={**decision.revision_feedback(draft_blocks),
+                              'lookup_call_id':message['tool_calls'][0]['id']}
+                if decision.decision=='needs_evidence' and decision.lookup.goal_id:
+                    bindings=dict(self.get_run(run_id).get('goal_bindings',{}))
+                    bindings[message['tool_calls'][0]['id']]=decision.lookup.goal_id
+                    self.store.update(run_id,goal_bindings=bindings)
+                self.store.update(run_id, evidence_reviews=reviews + [snapshot],goal_progress=progress,
+                                  answer_feedback=feedback)
                 if decision.decision=='ready' and not task_goals.complete(state.get('route',{}),progress):
                     updated,_=self.scoped_tools(state,False)
                     step=task_goals.initial_call(state.get('route',{}),progress,{d['function']['name'] for d in updated},state['messages'])
@@ -334,12 +375,61 @@ class AgentGraph:
                 self.store.update(run_id, answer_delivery_failures=failures)
                 if attempt:
                     raise ModelFailure('invalid_model_response') from None
+                # A format error (for example revise plus lookup) does not erase
+                # an independently valid diagnosis of this unchanged draft.
+                try:
+                    candidate=DraftReview.model_validate_json((reply.get('content') or '').strip())
+                    defects=[c.model_dump() for c in candidate.checks if c.issue!='none']
+                    if defects:
+                        diagnosed=DraftReview.model_validate({'decision':'revise','checks':defects})
+                        diagnosed.checked(draft_blocks,request.sources,names,receipts,aliases,evidence_refs=proofs)
+                        previous_issues=diagnosed.revision_feedback(draft_blocks)['issues']
+                except (ValueError,TypeError,KeyError):pass
                 messages.insert(1, {'role': 'system', 'content':
                     '上次校核输出不符合结构或原文引用契约；按约定返回，quote须为对应已读原文中的连续文字，补查仅用可申请工具。'
                     +json.dumps({'contract_error':[
                         {'path':list(error['loc']),'type':error['type']}
                         for error in exc.errors(include_url=False,include_input=False)]
-                        if hasattr(exc,'errors') else str(exc)},ensure_ascii=False)})
+                        if hasattr(exc,'errors') else str(exc),
+                        'previous_output':(reply.get('content') or '')[:10000],
+                        'preserved_issues':previous_issues},ensure_ascii=False)})
+
+    async def plan_evidence(self, state, available):
+        readonly=task_goals.evidence_tools(state.get('route',{}),self.get_run(state['run_id']).get('goal_progress',{}),available)
+        if not readonly:
+            return await self.factual_reply(state,available)
+        run_id=state['run_id']
+        request=self.answer_input(state,readonly,False)
+        messages=self.context.evidence_plan(request,self.get_run(run_id).get('sources',[]))
+        names={d['function']['name'] for d in readonly}
+        async def discard(_):pass
+        for attempt in range(2):
+            reply=await self.invoke_model(run_id,'evidence_plan',replace(self.settings,agent_thinking=False),messages,[],discard)
+            try:
+                if reply.get('tool_calls'):raise ValueError('Plan uses the explicit lookup contract')
+                plan=EvidencePlan.model_validate_json((reply.get('content') or '').strip())
+                if plan.lookup and plan.lookup.name not in names:raise ValueError('Lookup is outside the read-only scope')
+                if plan.lookup:
+                    plan.lookup.goal_id=task_goals.lookup_goal(state.get('route',{}),self.get_run(run_id).get('goal_progress',{}),plan.lookup)
+                message=None
+                if plan.lookup:
+                    message={'role':'assistant','content':None,'tool_calls':[{
+                        'id':'evidence_'+run_id+'_'+str(state.get('tool_count',0)),'type':'function',
+                        'function':{'name':plan.lookup.name,'arguments':json.dumps(plan.lookup.arguments,ensure_ascii=False)}}]}
+                    validated_calls(message,state.get('extended_episodes',False))
+                    if plan.lookup.goal_id:
+                        bindings=dict(self.get_run(run_id).get('goal_bindings',{}));bindings[message['tool_calls'][0]['id']]=plan.lookup.goal_id
+                        self.store.update(run_id,goal_bindings=bindings)
+                plans=list(self.get_run(run_id).get('evidence_plans',[]))
+                self.store.update(run_id,evidence_plans=plans+[plan.model_dump()])
+            except (ValueError,KeyError,TypeError) as exc:
+                failures=list(self.get_run(run_id).get('evidence_plan_failures',[]))
+                failures.append({'reason':str(exc),'content':reply.get('content') or ''})
+                self.store.update(run_id,evidence_plan_failures=failures)
+                if attempt:raise ModelFailure('invalid_model_response') from None
+                messages.insert(1,{'role':'system','content':'上次查证计划不符合契约：'+str(exc)})
+                continue
+            return message if message else await self.factual_reply(state,available)
 
 
     async def page_message(self, state, names, final_only):
@@ -393,6 +483,12 @@ class AgentGraph:
         if progress!=run.get('goal_progress',{}):self.store.update(run_id,goal_progress=progress)
         if task_goals.goals(state.get('route',{})) and task_goals.complete(state.get('route',{}),progress):final_only=True
         available,allowed=self.scoped_tools(state,final_only)
+        closed=task_goals.close_failed_queries(state.get('route',{}),progress,state['messages'],allowed,run.get('sources',[]))
+        if closed!=progress:
+            progress=task_goals.reconcile(state.get('route',{}),closed,run.get('goal_bindings',{}),state['messages'],run.get('control_blocked',False))
+            self.store.update(run_id,goal_progress=progress)
+            if task_goals.complete(state.get('route',{}),progress):final_only=True
+            available,allowed=self.scoped_tools(state,final_only)
         names = {d['function']['name'] for d in available}
         goal_call=None if final_only else task_goals.initial_call(state.get('route',{}),progress,names,state['messages'])
         if not final_only and not goal_call and 'query_library' in names:
@@ -411,7 +507,9 @@ class AgentGraph:
                   or control_receipt_step(state.get('route',{}),state['messages'])
                   or unsupported_setting_step(state.get('route',{}),progress)
                   or recovered_selection_reply(state.get('route', {}), state['messages'])
-                  or reply_step(state.get('route', {}), state['messages'], names))
+                  or (selected if selected and selected['kind']=='selection' and len(plan)<=1 else None)
+                  or reply_step(state.get('route', {}), state['messages'], names)
+                  or task_goals.failure_step(state.get('route',{}),progress,state['messages']))
         if direct and direct['kind']=='library':
             receipts={row['call_id']:json.dumps(row,ensure_ascii=False) for row in self.context.review_receipts(state['messages'])}
             decision=AnswerReview.model_validate({'decision':'ready','checks':direct['receipt_checks'],
@@ -442,7 +540,7 @@ class AgentGraph:
             blocks=decision.checked(sources,names,receipts)
             progress=task_goals.reviewed(state.get('route',{}),progress,decision.goals,sources,state['messages'],names,blocks)
             self.store.update(run_id,goal_progress=progress,evidence_reviews=self.get_run(run_id).get('evidence_reviews',[])+[decision.model_dump()])
-        canonical = (direct and direct['kind'] in {'literal_titles','library','duration_candidates','selection_clarification','acknowledgement','control_receipts','unsupported_setting','unsupported','cancel_timer_explanation','selection','episode_page','recovered_selection'}
+        canonical = (direct and direct['kind'] in {'query_failures','literal_titles','library','duration_candidates','selection_clarification','acknowledgement','control_receipts','unsupported_setting','unsupported','cancel_timer_explanation','selection','episode_page','recovered_selection'}
                      and (not plan or task_goals.complete(state.get('route',{}),progress)))
         if self.get_run(run_id).get('playback_refresh_pending') and not final_only:
             message = {'role': 'assistant', 'content': None, 'tool_calls': [{
@@ -518,7 +616,7 @@ class AgentGraph:
         if not calls and not canonical and state.get('research') and (task_goals.goals(state.get('route',{})) or factual_delivery_needed(state.get('route', {}))):
             try:
                 if task_goals.goals(state.get('route',{})) and not sources and not task_goals.complete(state.get('route',{}),progress):
-                    message=await self.review_reply(state,message,available)
+                    message=await self.plan_evidence(state,available)
                 else:message = await self.factual_reply(state, available)
             except ContinueGoalPlan:
                 return await self.model_node({**state,'rounds':state['rounds']+1})
@@ -601,10 +699,14 @@ class AgentGraph:
                     'candidate': {**call['arguments'], **selection}}})
             else:
                 executable.append(call)
+        if not calls and (not direct or direct['kind']!='query_failures'):
+            failures=task_goals.query_failures(route,self.get_run(run_id).get('goal_progress',{}))
+            if failures:
+                message={**message,'content':'\n\n'.join(filter(None,[message.get('content'),self.query_renderer({'kind':'query_failures','failures':failures})]))}
         messages = state['messages'] + [message]
         if task_goals.goals(route):
             current=self.get_run(run_id)
-            bindings=task_goals.bind(route,current.get('goal_progress',{}),current.get('goal_bindings',{}),executable+research_plan)
+            bindings=task_goals.bind(route,current.get('goal_progress',{}),current.get('goal_bindings',{}),executable+research_plan,state['messages'])
             self.store.update(run_id,goal_bindings=bindings)
         if not executable and not research_plan:
             messages += [{'role': 'tool', 'tool_call_id': r['call_id'],

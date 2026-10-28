@@ -3,6 +3,7 @@ import json
 import re
 from maoer_agent.tools.results import catalog_page_chain, catalog_page_view
 from datetime import datetime, timezone, timedelta
+from maoer_agent.memory.history import podcast_identities
 
 
 def episode_pages(messages):
@@ -25,9 +26,9 @@ def episode_pages(messages):
 
 
 def displayed_episode_pages(messages):
-    """Bind numbered lists actually shown in replies to unique observed IDs."""
+    """Bind lists actually shown in replies to unique observed IDs."""
     end=max((i for i,m in enumerate(messages) if m['role']=='user'),default=len(messages))
-    episodes={};podcasts={};pages=[];calls={};observed=[]
+    episodes={};podcasts=podcast_identities(messages[:end]);pages=[];calls={};observed=[]
     for message in messages[:end]:
         calls.update((c['id'],c['function']) for c in message.get('tool_calls',[]))
         if message['role']=='tool':
@@ -61,10 +62,21 @@ def displayed_episode_pages(messages):
                 page['query']={k:origin[k] for k in ('call_id','arguments')}
                 page['query'].update({k:origin['result'][k] for k in ('offset','has_more','next_offset') if k in origin['result']})
             pages.append(page)
-        for line in message['content'].splitlines():
-            match=re.match(r'^\s*(\d+)[.)、]\s*(.+)',line)
-            if not match:continue
-            ordinal=int(match[1]);text=match[2].replace('**','')
+        lines=message['content'].splitlines()
+        plain=all(sum(e.get('title')==line.strip().replace('**','') for e in episodes.values())==1
+                  for line in lines if line.strip())
+        for line in lines:
+            match=re.match(r'^\s*(?:(\d+)[.)、]\s*|[-*•]\s+)(.+)',line)
+            if not match:
+                if plain and line.strip():
+                    text=line.strip().replace('**','');ordinal=len(rows)+1
+                    item=next(e for e in episodes.values() if e.get('title')==text)
+                    rows.append({k:item[k] for k in ('id','title','podcast_id')});previous=ordinal
+                    continue
+                if line.strip():save();rows=[];previous=None;invalid=False
+                continue
+            ordinal=int(match[1]) if match[1] else len(rows)+1
+            text=match[2].replace('**','')
             matches=[e for e in episodes.values() if e.get('title') and e['title'] in text]
             if previous is not None and ordinal!=previous+1:save();rows=[];invalid=False
             if len(matches)!=1:invalid=True;previous=ordinal;continue
@@ -85,6 +97,19 @@ def episode_page_state(messages):
             current.append({'call_id':message['tool_call_id'],'arguments':json.loads(call['arguments']),
                 **{k:result[k] for k in ('status','offset','returned','has_more','next_offset') if k in result}})
     return {'displayed_pages':displayed_episode_pages(messages),'current_queries':current}
+
+
+def displayed_selection(lookup, pages):
+    if lookup.get('selector_kind')!='displayed_page':return None
+    selected=[p for p in pages if (not lookup.get('page_reference') or p['reference']==lookup['page_reference'])
+              and (not lookup.get('podcast_title') or p.get('podcast_title')==lookup['podcast_title'])]
+    if len(selected)!=1:return None
+    page=selected[0];number=lookup.get('selector_value',0)
+    if not 0<number<=len(page['items']):return None
+    item=page['items'][number-1]
+    if any(lookup.get(k) and lookup[k]!=item[v] for k,v in (('episode_id','id'),('podcast_id','podcast_id'))):
+        raise ValueError('Displayed selection identity does not match its actual item')
+    return page,item
 
 
 def conversation_view(messages, *, history_only=False):

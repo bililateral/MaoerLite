@@ -6,6 +6,8 @@ from maoer_agent.research.store import digest
 from maoer_agent.core.urls import public_url, public_links, known_public_url
 from maoer_agent.contracts.execution import ResearchContext
 
+WEB_PAGE_CHARACTERS = 6000
+
 
 
 class ResearchTools:
@@ -77,13 +79,12 @@ class ResearchTools:
         title = next((s['title'] for s in context.sources if s.get('source_url') == url), urlsplit(url).hostname)
         text = raw[:200000]
         document_id = self.store.document(text)
-        # Retrieve passages around the current question, instead of quoting only the header.
+        # Offsets select evidence ranges. A keyword locates text without silently
+        # skipping the start, including when it only matches navigation/footer text.
         query = args.get('query', '').strip()
         offset = args.get('offset', 0)
-        if query and offset == 0:
-            position = text.lower().find(query.lower())
-            if position >= 0: offset = max(0, position - 300)
-        excerpt = text[offset:offset + 6000]
+        position = text.lower().find(query.lower()) if query else -1
+        excerpt = text[offset:offset + WEB_PAGE_CHARACTERS]
         return {'status': 'ok', 'items': [{'kind': 'web', 'id': digest(url), 'title': title,
                     'source_url': url, 'original_url': url, 'evidence': excerpt,
                     'evidence_field': '网页正文节选', 'evidence_truncated': len(raw) > len(excerpt),
@@ -91,5 +92,7 @@ class ResearchTools:
                     'document_id': document_id, 'description_truncated': len(raw) > 200000 or bool(saved and saved.get('description_truncated')),
                     'offset': offset, 'freshness': 'cached' if saved else 'refreshed',
                     'fetched_at': saved['fetched_at'] if saved else int(datetime.now(timezone.utc).timestamp())}],
+                'content_length': len(text), 'query_match_offset': position,
+                'has_previous': offset > 0, 'previous_offset': max(0, offset - WEB_PAGE_CHARACTERS),
                 'has_more': offset + len(excerpt) < len(text), 'next_offset': offset + len(excerpt),
                 'note': '已读取网页正文；提取结果可能不含动态加载或受限内容。'}

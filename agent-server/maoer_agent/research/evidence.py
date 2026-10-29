@@ -58,7 +58,6 @@ def candidate_view(messages, delivery='answer'):
             for item in result.get('items', []):
                 if index>=start and delivery!='results' and item.get('kind') == 'web' and not item.get('document_id'):
                     item.pop('citation', None)
-                    item.pop('evidence', None)
             message = {**message, 'content': json.dumps(result, ensure_ascii=False)}
         view.append(message)
     return view

@@ -12,7 +12,11 @@ def control_receipt_step(route,messages):
     if (not plan or any(g['kind'] not in {'control','unsupported'} for g in plan) or route.get('web') or route.get('library')
             or route.get('response_needs',{}).get('app_guidance')
             or route.get('response_needs',{}).get('control_explanation','none')!='none'):return None
-    receipts=[(c,r) for c,r in observations(last_turn(messages)) if c['name'] in TOOLS and TOOLS[c['name']].changes_state]
+    prerequisites={'rss_refresh_required','playback_identity_refresh_required',
+                   'unverified_podcast_id','unverified_episode_id'}
+    receipts=[(c,r) for c,r in observations(last_turn(messages))
+              if c['name'] in TOOLS and TOOLS[c['name']].changes_state
+              and not (r.get('executed') is False and r.get('code') in prerequisites)]
     if [c['name'] for c,r in receipts]!=route.get('control_actions',[]):return None
     return {'kind':'control_receipts','receipts':[{'name':c['name'],'arguments':c['arguments'],'result':r} for c,r in receipts],
             'unsupported':list(dict.fromkeys(route.get('unsupported_request',{}).get('actions',[])+

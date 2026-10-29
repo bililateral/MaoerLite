@@ -136,6 +136,7 @@ class MaoerPlaybackService : MediaLibraryService() {
                 if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION) ||
                     events.contains(Player.EVENT_IS_PLAYING_CHANGED) ||
                     events.contains(Player.EVENT_POSITION_DISCONTINUITY) ||
+                    events.contains(Player.EVENT_PLAYBACK_STATE_CHANGED) ||
                     events.contains(Player.EVENT_PLAYBACK_PARAMETERS_CHANGED)) persistPlaybackSnapshot()
             }
         })
@@ -203,9 +204,14 @@ class MaoerPlaybackService : MediaLibraryService() {
             item.asAudio()
         }
         snapshots.trySend(PlaybackSnapshot(queue, currentId, player.currentPosition.coerceAtLeast(0), player.playbackParameters.speed))
-        if (currentId in heardIds) queue.find { it.id == currentId }?.let {
+        val heard = currentId in heardIds
+        val previous = library.entries.value.find { it.audio.id == currentId }
+        // A paused seek updates an existing resume point, including after a
+        // process restart. Preparing an unheard episode must not create history.
+        if (heard || previous != null) queue.find { it.id == currentId }?.let {
             progressWrites.trySend(ProgressWrite(it, player.currentPosition, player.duration.coerceAtLeast(0),
-                System.currentTimeMillis(), ended || player.playbackState == Player.STATE_ENDED))
+                if (heard) System.currentTimeMillis() else previous!!.lastPlayedAt,
+                ended || player.playbackState == Player.STATE_ENDED))
         }
     }
 

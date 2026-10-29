@@ -13,6 +13,7 @@ class ResearchContext:
     known_urls: tuple[str, ...] = ()
     web_relevance_model: RelevanceCall | None = None
     information_request: str = ''
+    query_scope: str = ''
 
 
 @dataclass(frozen=True)

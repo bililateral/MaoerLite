@@ -214,5 +214,7 @@
   "body_too_large": "请求内容超过服务读取上限，请缩短消息或反馈客户端问题。",
   "request_timeout": "助手服务等待客户端上传请求超时，请检查手机到服务器的连接后恢复。",
   "tool_not_allowed": "本轮未开放此项操作。",
-  "rss_rerank_failed": "RSS检索相关性核对失败。"
+  "rss_rerank_failed": "RSS检索相关性核对失败。",
+  "recent_updates_snapshot_missing": "更新列表快照不存在或查询条件不匹配，请重新查询第一页。",
+  "rss_episode_ambiguous": "分集引用不能唯一对应当前RSS条目，请重新查询节目分集。"
 }

@@ -39,7 +39,7 @@ def prepare_calls(messages, memory, calls, message, allowed, run_id, rounds):
                     and item.get('kind') == 'episode' for item in known):
                 invalid_identities.setdefault(call['id'], 'unverified_episode_id')
         ids = [c['id'] for c in calls]
-        seen = {c['id'] for m in messages for c in m.get('tool_calls', [])}
+        seen = {c['id'] for m in messages for c in (m.get('tool_calls') or [])}
         if any(not i or i in seen for i in ids):
             raise ModelFailure('invalid_tool_call')
         executable = [c for c in calls if c['id'] not in invalid_identities and

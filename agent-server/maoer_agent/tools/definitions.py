@@ -69,6 +69,7 @@ class RecentUpdates(StrictModel):
     days: int = Field(default=0, ge=0, le=3650, description='0表示不限定天数，返回最近发布；非0为北京时间滚动天数。')
     podcast_ids: list[str] = Field(default_factory=list, max_length=30, description='空表示全部内置节目；收藏范围先读取真实收藏节目ID。')
     offset: int = Field(default=0, ge=0, le=100000)
+    query_snapshot: str = Field(default='', max_length=64, description='续页沿用第一页返回的query_snapshot，保持同一批排序与刷新结果；重新查询时省略此字段并从offset=0开始。')
 
 
 class LibraryQuery(StrictModel):

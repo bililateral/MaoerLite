@@ -9,7 +9,7 @@ import okio.ByteString.Companion.encodeUtf8
 class RssParser {
     private data class Node(val name: String, val ns: String, val href: String = "", val value: StringBuilder = StringBuilder())
     private class Entry {
-        var guid = ""; var title = ""; var url = ""; var description = ""
+        var guid = ""; var title = ""; var url = ""; var description = ""; var content = ""
         var cover = ""; var published = ""; var duration = 0L
     }
 
@@ -60,7 +60,7 @@ class RssParser {
                                 "guid" -> e.guid = value
                                 "title" -> e.title = plainText(value)
                                 "description" -> if (e.description.isBlank()) e.description = plainText(value)
-                                "encoded" -> if (node.ns == CONTENT) e.description = plainText(value)
+                                "encoded" -> if (node.ns == CONTENT) e.content = plainText(value)
                                 "pubDate" -> e.published = value
                                 "duration" -> if (node.ns == ITUNES) e.duration = parseDuration(value)
                             } }
@@ -103,7 +103,7 @@ class RssParser {
             // when a publication date exists; URL is the final fallback, never list position.
             val identity = e.guid.ifBlank { if (e.published.isNotBlank()) "${e.title}|${e.published}" else e.url }
             PodcastEpisode("${source.id}:${identity.encodeUtf8().sha256().hex()}", e.title, e.url,
-                e.description, e.cover, e.published, e.duration)
+                e.content.ifBlank { e.description }, e.cover, e.published, e.duration)
         }.distinctBy { it.id }
         require(episodes.isNotEmpty()) { "节目源中没有可播放的音频分集" }
         return PodcastFeed(source.id, title, author, description, cover, episodes,

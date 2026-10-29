@@ -19,7 +19,7 @@ class ResearchTools:
         name, args = call['name'], call['arguments']
         if name == 'list_recent_updates':
             from maoer_agent.research.updates import recent_updates
-            return await recent_updates(self.rss, **args)
+            return await recent_updates(self.rss, **args, snapshot_scope=context.query_scope)
         if name == 'search_rss': return await self.rss.search(**args, relevance_model=context.relevance_model)
         if name == 'read_episode_description': return await self.rss.read(**args)
         request_id = context.request_key

@@ -217,7 +217,7 @@ def context(completed):
         if len(group) > MAX_HISTORY_MESSAGES or len(encoded(group)) > MAX_HISTORY_CHARS:
             # Keep an oversized research turn's question and final answer.
             # Executable IDs still come only from bounded reference memory.
-            calls = {c['id']: c['function']['name'] for m in group for c in m.get('tool_calls', [])}
+            calls = {c['id']: c['function']['name'] for m in group for c in (m.get('tool_calls') or [])}
             outcomes = [{'tool': calls[m['tool_call_id']], 'status': json.loads(m['content']).get('status', 'unknown')}
                         for m in group if m['role'] == 'tool' and m.get('tool_call_id') in calls]
             answer = next((m.get('content') or '' for m in reversed(group)

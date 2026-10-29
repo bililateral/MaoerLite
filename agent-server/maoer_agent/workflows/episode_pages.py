@@ -19,7 +19,7 @@ def observations(messages):
     calls = {}
     rows = []
     for message in messages:
-        for call in message.get('tool_calls', []):
+        for call in (message.get('tool_calls') or []):
             calls[call['id']] = {'name': call['function']['name'],
                                  'arguments': json.loads(call['function']['arguments'])}
         if message['role'] == 'tool' and message['tool_call_id'] in calls:

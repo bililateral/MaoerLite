@@ -30,7 +30,7 @@ def displayed_episode_pages(messages):
     end=max((i for i,m in enumerate(messages) if m['role']=='user'),default=len(messages))
     episodes={};podcasts=podcast_identities(messages[:end]);pages=[];calls={};observed=[]
     for message in messages[:end]:
-        calls.update((c['id'],c['function']) for c in message.get('tool_calls',[]))
+        calls.update((c['id'],c['function']) for c in (message.get('tool_calls') or []))
         if message['role']=='tool':
             if message.get('tool_call_id') not in calls:continue
             result=json.loads(message['content'])
@@ -90,7 +90,7 @@ def episode_page_state(messages):
     end=max((i for i,m in enumerate(messages) if m['role']=='user'),default=len(messages))
     calls={};current=[]
     for message in messages[end:]:
-        calls.update((c['id'],c['function']) for c in message.get('tool_calls',[]))
+        calls.update((c['id'],c['function']) for c in (message.get('tool_calls') or []))
         call=calls.get(message.get('tool_call_id'))
         if message['role']=='tool' and call and call['name']=='list_episodes':
             result=json.loads(message['content'])

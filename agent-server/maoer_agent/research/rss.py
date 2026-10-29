@@ -19,6 +19,7 @@ from maoer_agent.contracts.research import RSS_SEARCH_PAGE_SIZE
 CATALOG = json.loads(files('maoer_agent.resources').joinpath('research_catalog.json').read_text(encoding='utf-8'))
 CONTENT = '{http://purl.org/rss/1.0/modules/content/}encoded'
 ITUNES_DURATION = '{http://www.itunes.com/dtds/podcast-1.0.dtd}duration'
+FEED_IDENTITY_VERSION = 1
 
 
 def duration_seconds(value):
@@ -52,6 +53,29 @@ def plain(text, paragraphs=False):
     return re.sub(r'\n{3,}', '\n\n', re.sub(r' *\n *', '\n', text)).strip()
 
 
+def identity_title(text):
+    """Match RssParser.plainText's existing Android identity, not display HTML decoding.
+
+    Keep persisted Android IDs stable. Unrecognised HTML entities remain literal
+    here even though the server's readable title can decode them.
+    """
+    text = re.sub(r'<(script|style)\b[^>]*>[\s\S]*?</\1\s*>', '', text, flags=re.I)
+    text = re.sub(r'<!--[\s\S]*?-->', '', text)
+    def anchor(match):
+        url, label = match[2].strip(), match[3]
+        return f'{label} ({url})' if urlsplit(url).scheme in ('http', 'https') and label != url else label
+    text = re.sub(r'<a\b[^>]*href\s*=\s*(["\'])(.*?)\1[^>]*>([\s\S]*?)</a\s*>', anchor, text, flags=re.I)
+    text = re.sub(r'<br\s*/?>', '\n', text, flags=re.I)
+    text = re.sub(r'<li\b[^>]*>', '\n• ', text, flags=re.I)
+    text = re.sub(r'</?(p|div|section|h[1-6]|blockquote|ul|ol|li)\b[^>]*>', '\n\n', text, flags=re.I)
+    text = re.sub(r'<[^>]*>', ' ', text)
+    for entity, value in (('&nbsp;', ' '), ('&amp;', '&'), ('&quot;', '"'), ('&#39;', "'"), ('&lt;', '<'), ('&gt;', '>')):
+        text = text.replace(entity, value)
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+    text = re.sub(r'[^\S\n]+', ' ', text, flags=re.ASCII)
+    return re.sub(r'\n{3,}', '\n\n', re.sub(r' *\n *', '\n', text)).strip()[:16384]
+
+
 def parse_feed(raw, source):
     if len(raw) > 8_000_000 or b'<!DOCTYPE' in raw.upper() or b'<!ENTITY' in raw.upper():
         raise ValueError('rss_unsupported')
@@ -60,18 +84,28 @@ def parse_feed(raw, source):
     result = []
     title = plain(channel.findtext('title') or source['title'])
     for item in channel.findall('item'):
-        name = plain(item.findtext('title') or '')[:16384]
+        raw_name = item.findtext('title') or ''
+        name = plain(raw_name)[:16384]
         enclosure = item.find('enclosure')
         audio = enclosure.get('url', '').strip() if enclosure is not None else ''
         if not name or urlsplit(audio).scheme not in ('http', 'https'): continue
         published = (item.findtext('pubDate') or '').strip()
-        identity = (item.findtext('guid') or '').strip() or (f'{name}|{published}' if published else audio)
-        description = item.find(CONTENT)
-        if description is None or not ''.join(description.itertext()).strip(): description = item.find('description')
-        raw_body = (ET.tostring(description, encoding='unicode') if len(description) else description.text or '') if description is not None else ''
-        body = plain(raw_body, paragraphs=True)
+        guid = (item.findtext('guid') or '').strip()
+        identity = guid or (f'{identity_title(raw_name)}|{published}' if published else audio)
+        legacy_identity = guid or (f'{name}|{published}' if published else audio)
+        episode_id = source['id'] + ':' + digest(identity)
+        legacy_id = source['id'] + ':' + digest(legacy_identity)
+        body = ''
+        for field in (CONTENT, 'description'):
+            description = item.find(field)
+            if description is None: continue
+            raw_body = ET.tostring(description, encoding='unicode') if len(description) else description.text or ''
+            body = plain(raw_body, paragraphs=True)
+            if body: break
         link = (item.findtext('link') or '').strip()
-        result.append({'kind': 'episode', 'id': source['id'] + ':' + digest(identity), 'podcast_id': source['id'],
+        result.append({'kind': 'episode', 'id': episode_id, 'podcast_id': source['id'],
+                       'identity_version': FEED_IDENTITY_VERSION,
+                       'id_aliases': [legacy_id] if legacy_id != episode_id else [],
                        'title': name[:300], 'podcast_title': title[:150], 'published': published[:150],
                        'source_url': source['feed_url'], 'original_url': link if urlsplit(link).scheme in ('http', 'https') else '',
                        'duration_seconds': duration_seconds(item.findtext(ITUNES_DURATION) or ''),
@@ -96,7 +130,7 @@ class RssResearch:
 
     async def load(self, source, force=False, diagnostics=None):
         fetched, rows = self.store.feed(source['id'])
-        if not force and rows and all('duration_seconds' in r for r in rows) and time.time() - fetched < 3600:
+        if not force and rows and all('duration_seconds' in r and r.get('identity_version') == FEED_IDENTITY_VERSION for r in rows) and time.time() - fetched < 3600:
             return fetched, rows
         async with self.slots:
             try:
@@ -352,11 +386,20 @@ class RssResearch:
         fetched, rows = await self.load(source, diagnostics=failures)
         if not rows and failures: return {'status': 'error', **failures[podcast_id]}
         row = next((r for r in rows if r['id'] == episode_id), None)
+        if row is None:
+            aliases = [r for r in rows if episode_id in r.get('id_aliases', [])]
+            if len(aliases) > 1:
+                return {'status': 'error', 'code': 'rss_episode_ambiguous', 'note': error_message('rss_episode_ambiguous')}
+            row = aliases[0] if aliases else None
         if not row: return {'status': 'error', 'code': 'rss_episode_missing', 'note': error_message('rss_episode_missing')}
         body = row['description']
         excerpt = body[offset:offset + 4000]
         more = offset + len(excerpt) < len(body)
-        return {'status': 'ok', 'items': [self.evidence(row, excerpt, offset, fetched)], 'failures': failures, 'has_more': more,
+        # Retain the requested reference ID so existing citations and the tool
+        # result contract still identify the same observed episode.
+        item = self.evidence({**row, 'id': episode_id}, excerpt, offset, fetched)
+        if row['id'] != episode_id: item['canonical_id'] = row['id']
+        return {'status': 'ok', 'items': [item], 'failures': failures, 'has_more': more,
                 'next_offset': offset + len(excerpt), 'total_characters': len(body),
                 'note': '分集RSS说明。' + ('源文本超过读取上限，完整性未保证。' if row['description_truncated'] else '')}
 

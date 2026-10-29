@@ -608,7 +608,8 @@ class AgentGraph:
                     as_of=datetime.now(timezone(timedelta(hours=8))).date().isoformat() if goal.get('as_of')=='current' else ''
                     old = await self.research.perform(call, ResearchContext(
                         run_id + ':' + call['id'], current.get('input', {}).get('message', ''),
-                        tuple(current.get('sources', [])), relevance_model,as_of,known_urls(state['messages']),web_relevance_model,goal.get('request','')))
+                        tuple(current.get('sources', [])), relevance_model,as_of,known_urls(state['messages']),web_relevance_model,goal.get('request',''),
+                        query_scope=current['conversation_id']))
             results.append(self.record_result(run_id, {'call_id': call['id'], 'result': old}, call))
         messages = state['messages']
         if not state['calls']:

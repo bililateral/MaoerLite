@@ -202,7 +202,7 @@ def playback_preflight(messages, calls, run_id, round_number):
     """
     requests, checked, attempted = {}, set(), set()
     for message in last_turn(messages):
-        for call in message.get('tool_calls', []):
+        for call in (message.get('tool_calls') or []):
             if call['function']['name'] == 'list_episodes':
                 requests[call['id']] = json.loads(call['function']['arguments'])['podcast_id']
         if message['role'] == 'tool' and message['tool_call_id'] in requests:
@@ -224,13 +224,13 @@ def episode_selection_question(messages, calls):
     starts = [i for i, message in enumerate(messages) if message['role'] == 'user']
     previous = last_turn(messages[:starts[-1]]) if starts else []
     prior_queries, shown = {}, set()
-    prior_play_ids = {c['id'] for m in previous for c in m.get('tool_calls', [])
+    prior_play_ids = {c['id'] for m in previous for c in (m.get('tool_calls') or [])
                       if c['function']['name'] == 'play_episode'}
     prior_play = any(m['role'] == 'tool' and m.get('tool_call_id') in prior_play_ids
                      and json.loads(m['content']).get('playing') is True for m in previous)
     if not prior_play:
         for message in previous:
-            for call in message.get('tool_calls', []):
+            for call in (message.get('tool_calls') or []):
                 if call['function']['name'] == 'list_episodes':
                     prior_queries[call['id']] = json.loads(call['function']['arguments'])
             if message['role'] == 'tool' and message['tool_call_id'] in prior_queries:
@@ -241,7 +241,7 @@ def episode_selection_question(messages, calls):
                                  for item in result.get('items', []))
     queries, missing_numbers, missing_positions, alternatives, numbered, positioned = {}, set(), {}, {}, {}, {}
     for message in last_turn(messages):
-        for call in message.get('tool_calls', []):
+        for call in (message.get('tool_calls') or []):
             if call['function']['name'] == 'list_episodes':
                 queries[call['id']] = json.loads(call['function']['arguments'])
         if message['role'] != 'tool' or message['tool_call_id'] not in queries:

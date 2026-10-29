@@ -62,8 +62,12 @@ hint只从提供的节目名/分类中选择一个与用户实际话题相关的
         text = reply.get('content', '').strip()
         if text.startswith('```'): text = text.split('\n', 1)[1].rsplit('```', 1)[0]
         data = json.loads(text)
-        if correction and correction.get('fixed_route') is not None:
-            data={**correction['fixed_route'],'task_plan':data.get('task_plan')}
+        fixed_route=correction.get('fixed_route') if correction else None
+        if fixed_route is not None:
+            # Actions and goals are one projection; repair them together while
+            # keeping the already validated network and query scope.
+            data={**fixed_route,'control_actions':data.get('control_actions',[]),
+                  'task_plan':data.get('task_plan')}
         if any(type(data.get(k)) is not bool for k in ('podcast', 'web', 'device')): raise ValueError()
         if type(data.get('library', False)) is not bool: raise ValueError()
         constraint = NetworkConstraint.model_validate(data.get('network_constraint')).model_dump()
@@ -76,6 +80,11 @@ hint只从提供的节目名/分类中选择一个与用户实际话题相关的
                     quote in m.get('content', '') for m in messages if m['role'] == 'user'):
                 raise ValueError()
         controls = ControlIntent.model_validate({'actions': data.get('control_actions', [])}).actions
+        if fixed_route is not None:
+            remaining=iter(controls)
+            for action in fixed_route['control_actions']:
+                if not any(candidate==action for candidate in remaining):
+                    raise ValueError('Corrected controls must preserve declared actions, order and counts')
         try:
             plan=TaskPlan.model_validate(data.get('task_plan',{})).checked(controls,latest)
         except (ValueError,TypeError,AttributeError):

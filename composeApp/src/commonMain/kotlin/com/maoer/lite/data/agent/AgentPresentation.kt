@@ -30,7 +30,8 @@ internal fun agentScreenPresentation(state: AgentUiState): AgentScreenPresentati
     val action = when {
         state.history.deletePending -> if (state.working) AgentAction.None else AgentAction.Delete
         state.working -> AgentAction.Stop
-        pending || (last?.status == "failed" && last.error != "tool_round_limit") ->
+        pending || (last?.status == "failed" && last.error !in setOf(
+            "tool_round_limit", "model_attempt_budget_exhausted", "context_budget_exhausted")) ->
             if (last?.status == "failed") AgentAction.Retry else AgentAction.Recover
         else -> AgentAction.None
     }

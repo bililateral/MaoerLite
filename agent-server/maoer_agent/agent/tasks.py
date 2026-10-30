@@ -17,12 +17,13 @@ from maoer_agent.runtime.dispatch import ToolDispatcher
 
 
 class AgentTasks:
-    def __init__(self, settings, saver, store, model, research, catalog, page_renderer, query_renderer):
+    def __init__(self, settings, saver, store, model, research, catalog, page_renderer, query_renderer, *, query_scope_cleanup=None):
         self.settings, self.store = settings, store
         self.saver = saver
         self.deletion_lock = asyncio.Lock()
         self.model = model
         self.jobs = {}
+        self.query_scope_cleanup = query_scope_cleanup or (lambda scope: None)
         self.dispatcher = ToolDispatcher(store, self.get_run)
         self.graph = AgentGraph(settings, store, model, self.get_run, research, catalog, page_renderer, query_renderer).compile(saver)
 
@@ -155,6 +156,7 @@ class AgentTasks:
                 await self.saver.adelete_thread(run['id'])
             # Keep rows until every checkpoint deletion succeeds, allowing restart
             # or a repeated DELETE to finish a partially completed deletion.
+            self.query_scope_cleanup(conversation)
             self.store.remove_conversation(conversation)
 
     async def recover(self):

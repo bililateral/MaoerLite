@@ -22,6 +22,8 @@ class ResearchStore:
             CREATE TABLE IF NOT EXISTS vectors(id TEXT PRIMARY KEY, value BLOB);
             CREATE TABLE IF NOT EXISTS requests(id TEXT PRIMARY KEY, month TEXT, credits INTEGER);
             CREATE TABLE IF NOT EXISTS research_state(id TEXT PRIMARY KEY, body TEXT);
+            CREATE TABLE IF NOT EXISTS research_state_scopes(scope TEXT, state_id TEXT, PRIMARY KEY(scope,state_id));
+            CREATE INDEX IF NOT EXISTS research_state_scope_keys ON research_state_scopes(state_id);
         ''')
 
     def document(self, text):
@@ -76,9 +78,38 @@ class ResearchStore:
             row = self.db.execute('SELECT body FROM research_state WHERE id=?', (key,)).fetchone()
             return json.loads(row[0]) if row else {}
 
-    def save_state(self, key, value):
+    def save_state(self, key, value, *, scope=''):
         with self.lock, self.db:
             self.db.execute('INSERT OR REPLACE INTO research_state VALUES(?,?)', (key, json.dumps(value)))
+            if scope:
+                self.db.execute('INSERT OR IGNORE INTO research_state_scopes VALUES(?,?)', (scope, key))
+
+    def retain_state(self, key, scope):
+        if not scope: return
+        with self.lock, self.db:
+            self.db.execute('INSERT OR IGNORE INTO research_state_scopes SELECT ?,id FROM research_state WHERE id=?', (scope, key))
+
+    def state_scopes(self):
+        with self.lock:
+            return {row[0] for row in self.db.execute('SELECT DISTINCT scope FROM research_state_scopes')}
+
+    def release_scope(self, scope):
+        with self.lock, self.db:
+            # Shared snapshots remain until their last owning conversation ends.
+            self.db.execute('''DELETE FROM research_state WHERE id IN
+                (SELECT state_id FROM research_state_scopes WHERE scope=?) AND id NOT IN
+                (SELECT state_id FROM research_state_scopes WHERE scope<>?)''', (scope, scope))
+            self.db.execute('DELETE FROM research_state_scopes WHERE scope=?', (scope,))
+
+    def state_items(self, prefix):
+        with self.lock:
+            for key, body in self.db.execute('SELECT id,body FROM research_state WHERE substr(id,1,?)=?', (len(prefix), prefix)):
+                yield key, json.loads(body)
+
+    def remove_unowned_states(self, prefix):
+        with self.lock, self.db:
+            self.db.execute('''DELETE FROM research_state WHERE substr(id,1,?)=? AND id NOT IN
+                (SELECT state_id FROM research_state_scopes)''', (len(prefix), prefix))
 
     def close(self):
         self.db.close()

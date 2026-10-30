@@ -33,6 +33,11 @@ class AgentChatRequest(ConversationRequest):
     max_tokens: int = Field(default=AGENT_OUTPUT_TOKENS, ge=1, le=AGENT_THINKING_OUTPUT_TOKENS)
 
 
+class _PublishFailure(Exception):
+    def __init__(self, error):
+        self.error = error
+
+
 async def generate(settings, messages, tools, publish, *, client, gate):
     try:
         payload = AgentChatRequest.model_validate({'messages': messages, 'tools': tools or None,
@@ -117,7 +122,10 @@ async def generate(settings, messages, tools, publish, *, client, gate):
                     if len(text) > 16000:
                         raise ModelFailure('model_response_too_large')
                     if delta.get('content'):
-                        await publish(text)
+                        try:
+                            await publish(text)
+                        except Exception as exc:
+                            raise _PublishFailure(exc) from exc
                     for part in delta.get('tool_calls') or []:
                         index = part.get('index', 0)
                         if type(index) is not int or not 0 <= index < MAX_BATCH_CALLS:
@@ -130,6 +138,10 @@ async def generate(settings, messages, tools, publish, *, client, gate):
                             raise ModelFailure('invalid_tool_call')
             raise ModelFailure('stream_interrupted')
         return await asyncio.wait_for(read(), TOTAL_TIMEOUT)
+    except _PublishFailure as exc:
+        # The consumer owns its failures; upstream response translation must not
+        # relabel storage/runtime errors raised while publishing a valid chunk.
+        raise exc.error from None
     except ModelFailure as exc:
         exc.details = {**details(), **exc.details}
         raise

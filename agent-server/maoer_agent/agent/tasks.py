@@ -12,6 +12,7 @@ from maoer_agent.agent.graph import AgentGraph
 from maoer_agent.tools.results import outcome_facts
 from maoer_agent.agent.state import TaskConflict, TERMINAL
 from maoer_agent.core.limits import GRAPH_RECURSION_LIMIT
+from maoer_agent.core.diagnostics import failure_location
 from maoer_agent.runtime.dispatch import ToolDispatcher
 
 
@@ -55,9 +56,11 @@ class AgentTasks:
                 run_id, self.get_run(run_id).get('phase', 'unknown'), exc.code, exc.details)
             self.store.update(run_id, status='failed', calls=[], error=exc.code, error_detail=exc.details, retry_after=exc.delay)
         except Exception as exc:
-            logging.getLogger('maoer.agent').warning('agent_run=%s failure_type=%s', run_id, type(exc).__name__)
+            details = {'origin': 'storage' if isinstance(exc, sqlite3.Error) else 'runtime',
+                       'failure_type': type(exc).__name__}
+            logging.getLogger('maoer.agent').warning('agent_run=%s failure=%s', run_id, failure_location(exc))
             self.store.update(run_id, status='failed', calls=[],
-                              error='server_storage_error' if isinstance(exc, sqlite3.Error) else 'invalid_agent_response', error_detail={})
+                              error='server_storage_error' if isinstance(exc, sqlite3.Error) else 'invalid_agent_response', error_detail=details)
         finally:
             self.jobs.pop(run_id, None)
 

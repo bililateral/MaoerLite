@@ -2,6 +2,7 @@
 import asyncio
 import html
 import json
+import logging
 import re
 import time
 import httpx
@@ -14,6 +15,7 @@ from maoer_agent.contracts.retrieval import RelevanceJudge
 from maoer_agent.contracts.errors import ModelFailure
 from maoer_agent.research.store import digest
 from maoer_agent.core.errors import error_message
+from maoer_agent.core.diagnostics import failure_location
 from maoer_agent.contracts.research import RSS_SEARCH_PAGE_SIZE
 
 CATALOG = json.loads(files('maoer_agent.resources').joinpath('research_catalog.json').read_text(encoding='utf-8'))
@@ -158,6 +160,8 @@ class RssResearch:
                 elif isinstance(exc, sqlite3.Error): code = 'server_storage_error'
                 elif isinstance(exc, (ValueError, ET.ParseError)):
                     code = 'rss_too_large' if str(exc) == 'rss_too_large' else 'rss_parse_failed'
+                logging.getLogger('maoer.agent').warning('rss_load_failure source=%s code=%s status=%s failure=%s',
+                    source['id'], code, status, failure_location(exc))
                 if diagnostics is not None:
                     diagnostics[source['id']] = {'code': code, 'note': error_message(code, status=status), 'cached': bool(rows)}
             return fetched, rows
@@ -185,11 +189,14 @@ class RssResearch:
     async def maintain(self):
         while not self.closed:
             for source in CATALOG:
+                stage = 'load'
                 try:
                     _, rows = await self.load(source)
+                    stage = 'index'
                     await self.index_rows(rows)
-                except Exception:
-                    pass  # Query response reports actual vector coverage.
+                except Exception as exc:
+                    logging.getLogger('maoer.agent').warning('rss_maintenance_failure source=%s stage=%s failure=%s',
+                        source['id'], stage, failure_location(exc))
             await asyncio.sleep(3600)
 
     async def search(self, query, podcast_id='', required_terms=None, excluded_terms=None, offset=0, max_duration_seconds=0, mode='semantic', *, relevance_model=None):
@@ -229,8 +236,8 @@ class RssResearch:
         vector = None
         try:
             vector = await self.embeddings.query(query)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.getLogger('maoer.agent').warning('rss_query_embedding_failure failure=%s', failure_location(exc))
         terms = re.findall(r'[a-z0-9]+|[\u4e00-\u9fff]{2}', query.lower())
         scored = []
         if vector is not None: import numpy as np

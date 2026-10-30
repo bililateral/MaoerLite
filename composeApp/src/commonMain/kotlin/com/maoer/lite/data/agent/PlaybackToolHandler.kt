@@ -80,18 +80,21 @@ internal class PlaybackToolHandler(private val repository: PodcastRepository, pr
         val stable = withTimeoutOrNull(12000) {
             var observations = 0
             while (observations < 3) {
+                if (player.selectionFailure.value?.episodeId == id) return@withTimeoutOrNull false
                 delay(100)
                 observations = if (player.playbackAudioId.value == id && player.isPlaying.value && !player.buffering.value) observations + 1 else 0
             }
             true
         } == true
+        val failure = player.selectionFailure.value?.takeIf { it.episodeId == id }
         val snapshot = state()
-        val playing = stable && snapshot.getValue("episode_id").jsonPrimitive.content == id &&
+        val playing = failure == null && stable && snapshot.getValue("episode_id").jsonPrimitive.content == id &&
             snapshot.getValue("playing").jsonPrimitive.boolean && !snapshot.getValue("buffering").jsonPrimitive.boolean
         return buildJsonObject {
             snapshot.forEach { (key, value) -> put(key, value) }
-            put("status", when { playing -> "ok"; snapshot.getValue("playback_error").jsonPrimitive.content.isNotEmpty() -> "error"; else -> "accepted" })
-            put("note", if (playing) "已确认目标分集实际播放。" else errorText("player_not_confirmed"))
+            put("status", when { playing -> "ok"; failure != null || snapshot.getValue("playback_error").jsonPrimitive.content.isNotEmpty() -> "error"; else -> "accepted" })
+            if (failure != null) { put("code", failure.code); put("reason", failure.code) }
+            put("note", when { playing -> "已确认目标分集实际播放。"; failure != null -> errorText(failure.code); else -> errorText("player_not_confirmed") })
         }
     }
 }

@@ -6,6 +6,8 @@ import com.maoer.lite.data.library.ListeningLibrary
 import com.maoer.lite.data.library.LibraryQueries
 import com.maoer.lite.data.podcast.PodcastRepository
 import com.maoer.lite.data.podcast.PodcastSearchIndex
+import com.maoer.lite.data.error.errorText
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.*
 
 internal class LibraryToolHandler(
@@ -14,7 +16,15 @@ internal class LibraryToolHandler(
     private val downloads: Downloads,
 ) {
     private val search = PodcastSearchIndex(repository.sources)
-    suspend fun perform(call: AgentCall): JsonObject {
+    suspend fun perform(call: AgentCall): JsonObject = try {
+        performRequest(call)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        agentToolError(errorText("library_read_failed"), "library_read_failed")
+    }
+
+    private suspend fun performRequest(call: AgentCall): JsonObject {
         val args = call.arguments
         require(call.name == "query_library" && args.keys.all { it in setOf("tab", "favorite_kind", "query", "offset") })
         val tab = args.getValue("tab").jsonPrimitive.content

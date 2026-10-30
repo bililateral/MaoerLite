@@ -167,7 +167,7 @@ def close_failed_queries(route,progress,messages,names,sources):
         if not failures or has_evidence:continue
         call,receipt=failures[-1]
         failure={'call_id':call['id'],'tool':call['name'],'status':receipt['status'] if own_failure else 'unavailable',
-                 'code':receipt.get('code') or 'tool_result_unverified'}
+                 'code':receipt.get('code') or receipt.get('reason') or 'tool_result_unverified'}
         p.update(status='unavailable',query_failure=failure,reason=failure['code'],proof_calls=[call['id']],
                  reviewed_calls=list(p.get('call_ids',[])))
     return result

@@ -1,6 +1,7 @@
 package com.maoer.lite.data.manager
 
 import com.maoer.lite.data.error.errorText
+import com.maoer.lite.data.error.AppFailure
 import com.maoer.lite.data.local.KeyValueStorage
 import com.maoer.lite.data.model.Audio
 import com.maoer.lite.data.library.ListeningLibrary
@@ -10,7 +11,9 @@ import com.maoer.lite.data.download.Downloads
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
-/** UI selects a queue; actual playing/position/error state always comes from Media3. */
+data class PlaybackSelectionFailure(val episodeId: String, val code: String)
+
+/** UI selects a queue; actual playing/position state comes from Media3. */
 class PlayerManager(private val storage: KeyValueStorage, private val mediaController: MediaPlayerController,
     private val library: ListeningLibrary, private val podcasts: PodcastRepository, private val downloads: Downloads) {
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -23,7 +26,11 @@ class PlayerManager(private val storage: KeyValueStorage, private val mediaContr
     val positionMs = mediaController.positionMs
     val durationMs = mediaController.durationMs
     val buffering = mediaController.buffering
-    val playbackError = mediaController.playbackError
+    private val _selectionFailure = MutableStateFlow<PlaybackSelectionFailure?>(null)
+    val selectionFailure = _selectionFailure.asStateFlow()
+    val playbackError = combine(mediaController.playbackError, selectionFailure) { media, selection ->
+        selection?.let { errorText(it.code) } ?: media
+    }.stateIn(scope, SharingStarted.Eagerly, mediaController.playbackError.value)
     val playbackSpeed = mediaController.playbackSpeed
     val sleepTimer = mediaController.sleepTimer
     private val _queue = MutableStateFlow<List<Audio>>(emptyList())
@@ -83,7 +90,9 @@ class PlayerManager(private val storage: KeyValueStorage, private val mediaContr
     fun play(audio: Audio) {
         userSelected = true
         selectionJob?.cancel()
+        _selectionFailure.value = null
         selectionJob = scope.launch {
+            var failureCode = "playback_prepare_failed"
             try {
                 _libraryError.value = null
                 val enriched = enrich(audio)
@@ -95,10 +104,14 @@ class PlayerManager(private val storage: KeyValueStorage, private val mediaContr
                 optional { downloads.awaitReady() }
                 if (playlist.none { it.id == audio.id }) setPlaylist(listOf(enriched))
                 _currentAudio.value = enriched
+                failureCode = "playback_start_failed"
                 mediaController.play(enriched)
+                failureCode = "playback_seek_failed"
                 if (!same || entry?.completed == true) mediaController.seekToMs(start)
             } catch (e: CancellationException) { throw e }
-            catch (_: Exception) { _libraryError.value = errorText("resume_record_write_failed") }
+            catch (error: Exception) {
+                _selectionFailure.value = PlaybackSelectionFailure(audio.id, (error as? AppFailure)?.code ?: failureCode)
+            }
         }
     }
     private suspend fun enrich(audio: Audio): Audio {
@@ -110,6 +123,7 @@ class PlayerManager(private val storage: KeyValueStorage, private val mediaContr
         catch (e: CancellationException) { throw e }
         catch (_: Exception) { _libraryError.value = errorText("library_unavailable"); null }
     fun resume() {
+        _selectionFailure.value = null
         val audio = currentAudio.value
         if (audio != null && library.entries.value.any { it.audio.id == audio.id && it.completed }) play(audio)
         else mediaController.resume()

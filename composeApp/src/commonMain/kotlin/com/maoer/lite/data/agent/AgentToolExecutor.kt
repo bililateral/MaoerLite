@@ -4,7 +4,6 @@ import com.maoer.lite.data.error.errorText
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
 import okio.ByteString.Companion.encodeUtf8
-import com.maoer.lite.data.error.*
 
 private val executionProcessInstance = agentId()
 
@@ -16,7 +15,6 @@ internal class AgentToolExecutor(
     private val snapshot: (String, String) -> JsonObject,
 ) {
     private fun state(status: String = "ok", note: String = "") = snapshot(status, note)
-    private fun error(note: String, reason: String = "tool_unavailable") = agentToolError(note, reason)
     suspend fun execute(run: String, call: AgentCall, conversationId: String = ""): AgentReceipt {
         val key = "$run:${call.id}".encodeUtf8().sha256().hex()
         val fingerprint = "${call.name}:${call.arguments}".encodeUtf8().sha256().hex()
@@ -40,13 +38,10 @@ internal class AgentToolExecutor(
                 storage.saveExecution(key, execution.copy(result = state("unknown", errorText("operation_cancelled"))))
             }
             throw cancelled
-        } catch (e: Exception) {
-            result = if (call.name in setOf("list_episodes", "get_podcast_details"))
-                error(failureText(e, rssFailureCode(e)), rssFailureCode(e))
-            else if (call.name == "search_catalog") error(errorText("catalog_query_failed"), "catalog_query_failed")
-            else if (call.name == "query_library") error(errorText("library_read_failed"), "library_read_failed")
-            else state("unknown", errorText("operation_unconfirmed")).let { snapshot ->
-                buildJsonObject { snapshot.forEach { (key, value) -> put(key, value) }; put("reason", "operation_unconfirmed") }
+        } catch (_: Exception) {
+            result = state("unknown", errorText("operation_unconfirmed")).let { snapshot ->
+                buildJsonObject { snapshot.forEach { (key, value) -> put(key, value) }
+                    put("code", "operation_unconfirmed"); put("reason", "operation_unconfirmed") }
             }
         }
         storage.saveExecution(key, execution.copy(result = result))

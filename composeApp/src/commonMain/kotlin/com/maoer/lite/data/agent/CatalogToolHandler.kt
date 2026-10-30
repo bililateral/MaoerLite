@@ -1,6 +1,9 @@
 package com.maoer.lite.data.agent
 
 import com.maoer.lite.data.error.errorText
+import com.maoer.lite.data.error.failureText
+import com.maoer.lite.data.error.rssFailureCode
+import kotlinx.coroutines.CancellationException
 import com.maoer.lite.data.podcast.PodcastRepository
 import com.maoer.lite.data.podcast.PodcastSearchIndex
 import kotlinx.serialization.json.*
@@ -8,7 +11,16 @@ import kotlinx.serialization.json.*
 internal class CatalogToolHandler(private val repository: PodcastRepository) {
     private val search = PodcastSearchIndex(repository.sources)
     private val knowledge = PodcastKnowledge(repository)
-    suspend fun perform(call: AgentCall): JsonObject {
+    suspend fun perform(call: AgentCall): JsonObject = try {
+        performRequest(call)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (error: Exception) {
+        val code = if (call.name in setOf("list_episodes", "get_podcast_details")) rssFailureCode(error) else "catalog_query_failed"
+        agentToolError(if (call.name == "search_catalog") errorText(code) else failureText(error, code), code)
+    }
+
+    private suspend fun performRequest(call: AgentCall): JsonObject {
         val args = call.arguments
         return when (call.name) {
             "get_podcast_details" -> {

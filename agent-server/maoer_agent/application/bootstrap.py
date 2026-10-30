@@ -6,7 +6,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from maoer_agent.agent.tasks import AgentTasks
 from maoer_agent.model.client import generate
 from maoer_agent.model.embeddings import LocalEmbeddings
-from maoer_agent.model.relevance import ModelRelevanceJudge, ModelWebRelevanceJudge
+from maoer_agent.research.relevance import ModelRelevanceJudge, ModelWebRelevanceJudge
 from maoer_agent.storage.tasks import Store
 from maoer_agent.research.store import ResearchStore
 from maoer_agent.research.rss import RssResearch, CATALOG

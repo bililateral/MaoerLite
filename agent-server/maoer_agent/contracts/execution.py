@@ -1,5 +1,6 @@
 """Data passed to tools and workflows, independent of runtime persistence."""
 from dataclasses import dataclass
+from typing import Callable
 from maoer_agent.contracts.retrieval import RelevanceCall
 
 
@@ -14,6 +15,8 @@ class ResearchContext:
     web_relevance_model: RelevanceCall | None = None
     information_request: str = ''
     query_scope: str = ''
+    checkpoint: dict | None = None
+    save_checkpoint: Callable[[dict], None] | None = None
 
 
 @dataclass(frozen=True)

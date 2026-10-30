@@ -28,10 +28,18 @@ class ResearchTools:
             as_of=getattr(context,'as_of_date','')
             if args.get('delivery','answer')!='results' and as_of and as_of not in query:
                 query += ' as of ' + as_of
-            result = await self.web.tavily('search', {'query': query, 'search_depth': 'basic', 'max_results': 8,
-                                                'include_answer': False, 'include_raw_content': False,
-                                                'auto_parameters': False}, request_id)
-            if result.get('status') == 'error': return result
+            checkpoint = context.checkpoint
+            if checkpoint is None:
+                result = await self.web.tavily('search', {'query': query, 'search_depth': 'basic', 'max_results': 8,
+                                                    'include_answer': False, 'include_raw_content': False,
+                                                    'auto_parameters': False}, request_id)
+                if result.get('status') == 'error': return result
+                # Commit acquired evidence before model processing. A retry can
+                # reassess these candidates without repeating the external request.
+                checkpoint = {'response': result, 'fetched_at': int(datetime.now(timezone.utc).timestamp())}
+                if context.save_checkpoint is not None:
+                    context.save_checkpoint(checkpoint)
+            result = checkpoint['response']
             items = []
             for row in result.get('results', [])[:8]:
                 url = row.get('url', '')
@@ -41,7 +49,7 @@ class ResearchTools:
                               'evidence': row.get('content', '')[:1400], 'evidence_field': '网页搜索摘要（未读正文）',
                               'evidence_level': 'search_summary',
                               'evidence_truncated': True, 'freshness': 'refreshed',
-                              'fetched_at': int(datetime.now(timezone.utc).timestamp())})
+                              'fetched_at': checkpoint['fetched_at']})
             candidates={}
             if args.get('delivery')=='results' and self.web_relevance is not None and items:
                 original=items

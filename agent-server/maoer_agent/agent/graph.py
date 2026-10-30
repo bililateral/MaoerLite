@@ -597,19 +597,25 @@ class AgentGraph:
                 old = next((r['result'] for r in run['results'] if r['call_id'] == call['id']), None)
             if old is None:
                 started = list(run.get('research_started', []))
-                if call['id'] in started:
+                checkpoint = run.get('research_checkpoints', {}).get(call['id'])
+                if call['id'] in started and checkpoint is None:
                     old = {'status': 'unknown', 'code': 'research_result_unknown',
                            'note': error_message('research_result_unknown')}
                 else:
                     # Conservative execution marker: unknown requests are never replayed.
-                    self.store.update(run_id, research_started=started + [call['id']])
+                    if call['id'] not in started:
+                        self.store.update(run_id, research_started=started + [call['id']])
+                    def save_checkpoint(value, call_id=call['id']):
+                        checkpoints = dict(self.get_run(run_id).get('research_checkpoints', {}))
+                        checkpoints[call_id] = value
+                        self.store.update(run_id, research_checkpoints=checkpoints)
                     current = self.get_run(run_id)
                     goal=task_goals.call_goal(state.get('route',{}),current.get('goal_bindings',{}),call['id'])
                     as_of=datetime.now(timezone(timedelta(hours=8))).date().isoformat() if goal.get('as_of')=='current' else ''
                     old = await self.research.perform(call, ResearchContext(
                         run_id + ':' + call['id'], current.get('input', {}).get('message', ''),
                         tuple(current.get('sources', [])), relevance_model,as_of,known_urls(state['messages']),web_relevance_model,goal.get('request',''),
-                        query_scope=current['conversation_id']))
+                        query_scope=current['conversation_id'], checkpoint=checkpoint, save_checkpoint=save_checkpoint))
             results.append(self.record_result(run_id, {'call_id': call['id'], 'result': old}, call))
         messages = state['messages']
         if not state['calls']:
